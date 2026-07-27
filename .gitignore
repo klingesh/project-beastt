@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+
+# BEASTT runtime data
+beastt_memory/
+*.log
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

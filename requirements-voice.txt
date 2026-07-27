@@ -1,0 +1,10 @@
+# Voice features for BEASTT (optional).
+# Install with:  pip install -r requirements-voice.txt
+#
+# Text-to-speech (BEASTT talks back) -- fully offline, zero config.
+pyttsx3>=2.90
+
+# Speech-to-text (BEASTT listens to you) -- offline via Whisper.
+SpeechRecognition>=3.10.0
+openai-whisper>=20231117
+PyAudio>=0.2.13           # microphone access (see README for OS install notes)

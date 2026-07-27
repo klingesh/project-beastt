@@ -1,0 +1,6 @@
+# --- Core ---
+requests>=2.31.0          # talk to the Ollama HTTP API
+python-dotenv>=1.0.0      # load settings from a .env file
+
+# --- Voice (optional, install with:  pip install -r requirements-voice.txt) ---
+# See requirements-voice.txt
