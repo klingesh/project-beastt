@@ -5,6 +5,9 @@
 pyttsx3>=2.90
 
 # Speech-to-text (BEASTT listens to you) -- offline via Whisper.
-SpeechRecognition>=3.10.0
+# We use `sounddevice` for mic capture instead of PyAudio: it bundles its own
+# PortAudio engine, so there's no C++ compiler needed (works on Windows +
+# Python 3.14 out of the box).
+sounddevice>=0.4.6
 openai-whisper>=20231117
-PyAudio>=0.2.13           # microphone access (see README for OS install notes)
+numpy>=1.24
