@@ -6,5 +6,6 @@ fine even when the voice extras aren't installed.
 
 from .tts import TextToSpeech
 from .stt import SpeechToText
+from .speaker import SpeakerVerifier
 
-__all__ = ["TextToSpeech", "SpeechToText"]
+__all__ = ["TextToSpeech", "SpeechToText", "SpeakerVerifier"]

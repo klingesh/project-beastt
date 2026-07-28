@@ -39,6 +39,16 @@ def _parse_args(argv=None) -> argparse.Namespace:
         "--name", default=None, help="What BEASTT should call you this session."
     )
     p.add_argument("--quiet", action="store_true", help="Hide startup diagnostics.")
+    p.add_argument(
+        "--enroll",
+        action="store_true",
+        help="Record your voiceprint so BEASTT can recognise only your voice.",
+    )
+    p.add_argument(
+        "--my-voice",
+        action="store_true",
+        help="Respond to only your enrolled voice, ignoring other speakers.",
+    )
     return p.parse_args(argv)
 
 
@@ -49,6 +59,9 @@ def _build_config(args: argparse.Namespace) -> Config:
     if args.name:
         config.user_name = args.name
     if args.voice:
+        config.voice_enabled = True
+    if args.my_voice:
+        config.speaker_only = True
         config.voice_enabled = True
     return config
 
@@ -76,6 +89,13 @@ def run(argv=None) -> None:
     config = _build_config(args)
     verbose = not args.quiet
 
+    # One-time voice enrollment, then exit.
+    if args.enroll:
+        from .enroll import run_enrollment
+
+        run_enrollment(config)
+        return
+
     if verbose:
         print(_BANNER)
 
@@ -87,7 +107,27 @@ def run(argv=None) -> None:
         from .voice import SpeechToText, TextToSpeech
 
         tts = TextToSpeech(rate=config.tts_rate)
-        stt = SpeechToText(model=config.stt_model)
+
+        # Optionally restrict listening to the owner's enrolled voice.
+        verifier = None
+        if config.speaker_only:
+            from .voice import SpeakerVerifier
+
+            verifier = SpeakerVerifier(
+                config.voiceprint_path, threshold=config.speaker_threshold
+            )
+            if not verifier.available:
+                print("[voice] Speaker recognition off (Resemblyzer not installed).")
+                verifier = None
+            elif not verifier.enrolled:
+                print(
+                    "[voice] No voiceprint found -- responding to all voices. "
+                    "Run `python main.py --enroll` first to lock it to your voice."
+                )
+            else:
+                print("[voice] Voice lock ON -- I'll only respond to your voice.")
+
+        stt = SpeechToText(model=config.stt_model, speaker_verifier=verifier)
         if not stt.available:
             print("[voice] Microphone input unavailable -- falling back to typed input.")
 
