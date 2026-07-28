@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 
 from .assistant import Assistant
 from .config import Config
@@ -16,7 +17,10 @@ _BANNER = r"""
    your personal AI friend
 """
 
-_EXIT_WORDS = {"bye", "goodbye", "exit", "quit", "see you", "see ya"}
+# Single words that mean "goodbye" on their own.
+_EXIT_WORDS = {"bye", "byebye", "goodbye", "exit", "quit", "stop", "goodnight"}
+# Multi-word farewell phrases.
+_EXIT_PHRASES = {"see you", "see ya", "see you later", "good night", "talk later"}
 
 
 def _parse_args(argv=None) -> argparse.Namespace:
@@ -50,7 +54,21 @@ def _build_config(args: argparse.Namespace) -> Config:
 
 
 def _is_exit(text: str) -> bool:
-    return text.strip().lower() in _EXIT_WORDS
+    """Detect a goodbye, tolerant of punctuation and speech-to-text quirks.
+
+    Whisper adds punctuation/capitalization (e.g. "Bye."), so we normalise
+    first, then match short farewell utterances only (to avoid quitting on a
+    sentence that merely mentions "bye" mid-conversation).
+    """
+    norm = re.sub(r"[^a-z0-9\s]", "", text.lower()).strip()
+    if not norm:
+        return False
+    words = norm.split()
+    if len(words) > 6:  # too long to be a simple sign-off
+        return False
+    if any(w in _EXIT_WORDS for w in words):
+        return True
+    return any(phrase in norm for phrase in _EXIT_PHRASES)
 
 
 def run(argv=None) -> None:
