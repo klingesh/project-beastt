@@ -48,7 +48,7 @@ class Config:
 
     # Speaker recognition (respond to only the owner's voice)
     speaker_only: bool = _get("BEASTT_MY_VOICE_ONLY", "off").lower() in ("on", "true", "1", "yes")
-    speaker_threshold: float = float(_get("BEASTT_SPEAKER_THRESHOLD", "0.75"))
+    speaker_threshold: float = float(_get("BEASTT_SPEAKER_THRESHOLD", "0.82"))
     voiceprint_path: str = _get("BEASTT_VOICEPRINT", "beastt_memory/voiceprint.npy")
 
     @classmethod

@@ -46,7 +46,7 @@ def _ensure_webrtcvad() -> None:
 
 
 class SpeakerVerifier:
-    def __init__(self, voiceprint_path: str, threshold: float = 0.75):
+    def __init__(self, voiceprint_path: str, threshold: float = 0.82):
         self.voiceprint_path = voiceprint_path
         self.threshold = threshold
         self.available = False
@@ -84,9 +84,24 @@ class SpeakerVerifier:
         return self.reference is not None
 
     # --- embeddings -------------------------------------------------------
+    def _preprocess(self, wav):
+        """Volume-normalise so matching depends on the voice, not the mic level.
+
+        Different speaking distances/levels otherwise shift the embedding and
+        cause false matches. We scale every clip to a consistent loudness before
+        embedding -- applied identically at enrollment and verification.
+        """
+        np = self._np
+        wav = wav.astype(np.float32)
+        rms = float(np.sqrt(np.mean(np.square(wav)))) + 1e-8
+        target_rms = 0.05
+        wav = wav * (target_rms / rms)
+        return np.clip(wav, -1.0, 1.0)
+
     def embed(self, audio_16k_mono_float32):
         """Return a normalised voice embedding for a 16 kHz mono float32 clip."""
-        return self._encoder.embed_utterance(audio_16k_mono_float32)
+        wav = self._preprocess(audio_16k_mono_float32)
+        return self._encoder.embed_utterance(wav)
 
     def verify(self, audio_16k_mono_float32) -> Tuple[bool, float]:
         """Return (is_owner, similarity_score) for an utterance."""
