@@ -85,17 +85,33 @@ class SpeakerVerifier:
 
     # --- embeddings -------------------------------------------------------
     def _preprocess(self, wav):
-        """Volume-normalise so matching depends on the voice, not the mic level.
+        """Trim silence and volume-normalise for a clean, comparable voiceprint.
 
-        Different speaking distances/levels otherwise shift the embedding and
-        cause false matches. We scale every clip to a consistent loudness before
-        embedding -- applied identically at enrollment and verification.
+        Two problems otherwise hurt accuracy:
+          * Enrollment clips are fixed-length and include silence/pauses, which
+            dilute the voiceprint versus tightly-trimmed live speech.
+          * Different mic distances/levels shift the embedding.
+
+        So we drop low-energy (silent) frames, then scale to a consistent
+        loudness -- applied identically at enrollment and verification.
         """
         np = self._np
         wav = wav.astype(np.float32)
+
+        # 1. Energy-based silence trimming (30 ms frames).
+        frame = int(0.03 * 16000)
+        if len(wav) >= frame * 2:
+            n = len(wav) // frame
+            frames = wav[: n * frame].reshape(n, frame)
+            energies = np.sqrt(np.mean(np.square(frames), axis=1))
+            peak = float(energies.max()) + 1e-8
+            voiced = energies > (0.15 * peak)  # keep frames near speech level
+            if int(voiced.sum()) >= 10:  # at least ~0.3s of speech
+                wav = frames[voiced].reshape(-1)
+
+        # 2. Volume-normalise.
         rms = float(np.sqrt(np.mean(np.square(wav)))) + 1e-8
-        target_rms = 0.05
-        wav = wav * (target_rms / rms)
+        wav = wav * (0.05 / rms)
         return np.clip(wav, -1.0, 1.0)
 
     def embed(self, audio_16k_mono_float32):
