@@ -13,7 +13,36 @@ this degrades gracefully and BEASTT simply responds to any voice.
 from __future__ import annotations
 
 import os
+import sys
+import types
 from typing import List, Tuple
+
+
+def _ensure_webrtcvad() -> None:
+    """Make `import webrtcvad` succeed even when it isn't installed.
+
+    Resemblyzer imports webrtcvad only to trim silence in `preprocess_wav`,
+    which BEASTT never calls (we feed already-captured audio straight to the
+    encoder and do our own voice-activity detection). webrtcvad is a C
+    extension with no prebuilt wheel for newer Pythons on Windows, so rather
+    than force users to install a C++ compiler, we register a tiny no-op stand-in.
+    """
+    try:
+        import webrtcvad  # noqa: F401  (real one if present)
+        return
+    except Exception:
+        pass
+    stub = types.ModuleType("webrtcvad")
+
+    class _Vad:  # minimal API surface Resemblyzer expects
+        def __init__(self, mode: int = 0):
+            self.mode = mode
+
+        def is_speech(self, *args, **kwargs) -> bool:
+            return True
+
+    stub.Vad = _Vad
+    sys.modules["webrtcvad"] = stub
 
 
 class SpeakerVerifier:
@@ -26,6 +55,8 @@ class SpeakerVerifier:
         self._encoder = None
         try:
             import numpy as np
+
+            _ensure_webrtcvad()  # slot in the stand-in before importing resemblyzer
             from resemblyzer import VoiceEncoder
 
             self._np = np
