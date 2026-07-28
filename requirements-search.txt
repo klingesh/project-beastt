@@ -1,0 +1,6 @@
+# Optional: higher-quality web search for BEASTT.
+# Search already works out of the box using `requests` (a core dependency).
+# Installing this gives cleaner results and a dedicated news feed.
+#
+# Install with:  pip install -r requirements-search.txt
+ddgs>=6.0.0

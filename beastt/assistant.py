@@ -11,11 +11,22 @@ from __future__ import annotations
 from typing import List, Optional
 
 from .brain import Brain, build_brain
+from .brain.base import Message
 from .config import Config
 from .memory import Memory
 from .personality import system_prompt, welcome_message
+from .search import WebSearch, extract_query, format_results, is_news, needs_search
 from .skills import default_skills
 from .skills.base import Skill
+
+_SEARCH_INSTRUCTION = (
+    "[You just searched the web for the user in real time. Use the results below "
+    "to answer their most recent message in your own warm, natural, conversational "
+    "voice -- like a friend catching them up. Give a concise summary with the key "
+    "facts (a few sentences), and you may mention a source name. If the results are "
+    "empty or don't actually answer the question, say honestly that you couldn't "
+    "find anything reliable. Never invent details that aren't in the results.]\n\n"
+)
 
 
 class Assistant:
@@ -33,6 +44,8 @@ class Assistant:
             system_prompt=system_prompt(self.config.name, self.config.user_name),
             max_messages=self.config.max_history_messages,
         )
+        self.search = WebSearch() if self.config.search_enabled else None
+        self._verbose = verbose
 
     # --- lifecycle --------------------------------------------------------
     def welcome(self) -> str:
@@ -62,10 +75,15 @@ class Assistant:
             self.memory.add_assistant(skill_reply)
             return skill_reply
 
-        # 2. Otherwise, think with the brain.
+        # 2. Otherwise, think with the brain -- augmenting with a live web
+        #    search first if the question needs current information.
         self.memory.add_user(text)
+        messages = self.memory.messages()
+        if self.search is not None and needs_search(text):
+            messages = self._augment_with_search(text, messages)
+
         try:
-            reply = self.brain.reply(self.memory.messages())
+            reply = self.brain.reply(messages)
         except Exception as exc:
             reply = (
                 "Hmm, I hit a snag trying to think that through "
@@ -76,6 +94,25 @@ class Assistant:
 
         self.memory.add_assistant(reply)
         return reply
+
+    def _augment_with_search(self, text: str, messages):
+        """Run a live web search and append the results as context for the brain."""
+        query = extract_query(text)
+        if self._verbose:
+            print(f"[search] Looking that up: {query!r}")
+        try:
+            if is_news(text):
+                results = self.search.news(query, self.config.search_max_results)
+            else:
+                results = self.search.search(query, self.config.search_max_results)
+        except Exception as exc:
+            if self._verbose:
+                print(f"[search] Search error: {exc}")
+            results = []
+
+        context = format_results(results)
+        note = Message(role="system", content=_SEARCH_INSTRUCTION + context)
+        return [*messages, note]
 
     def reset(self) -> None:
         """Forget the current conversation (keeps the personality)."""

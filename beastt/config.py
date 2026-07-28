@@ -42,6 +42,10 @@ class Config:
     # Memory
     max_history_messages: int = int(_get("BEASTT_MAX_HISTORY", "20"))
 
+    # Web search
+    search_enabled: bool = _get("BEASTT_SEARCH", "on").lower() in ("on", "true", "1", "yes")
+    search_max_results: int = int(_get("BEASTT_SEARCH_RESULTS", "5"))
+
     @classmethod
     def load(cls) -> "Config":
         return cls()
