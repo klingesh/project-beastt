@@ -11,11 +11,11 @@ import re
 from .base import Skill
 
 _REMEMBER = re.compile(
-    r"^\s*(?:hey\s+beastt[,\s]*)?(?:please\s+)?remember\s+(?:that\s+|this[:,]\s*|about\s+me\s+that\s+)?(.+)",
+    r"^\s*(?:hey\s+[a-z]{4,10}[,\s]+)?(?:please\s+)?remember\s+(?:that\s+|this[:,]\s*|about\s+me\s+that\s+)?(.+)",
     re.IGNORECASE,
 )
 _FORGET = re.compile(
-    r"^\s*(?:hey\s+beastt[,\s]*)?(?:please\s+)?forget\s+(?:about\s+|that\s+|the\s+)?(.+)",
+    r"^\s*(?:hey\s+[a-z]{4,10}[,\s]+)?(?:please\s+)?forget\s+(?:about\s+|that\s+|the\s+)?(.+)",
     re.IGNORECASE,
 )
 _FORGET_ALL = re.compile(

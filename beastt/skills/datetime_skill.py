@@ -13,7 +13,7 @@ from .base import Skill
 
 _PATTERN = re.compile(
     r"""^\s*
-    (?:hey\s+|ok\s+)?(?:beastt[\s,]*)?
+    (?:hey\s+|ok\s+)?(?:[a-z]{4,10}[\s,]+)?
     (?:please\s+)?
     (?:
         (?:what(?:'?s|\s+is)?\s+)?(?:the\s+)?(?:today'?s\s+)?date

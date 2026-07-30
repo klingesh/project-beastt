@@ -1,8 +1,8 @@
-# BEASTT 🤖
+# JARVIS 🤖
 
-> Your personal, JARVIS-inspired AI companion — a friend who talks, listens, knows your voice, and is always there for you.
+> Your own personal AI companion — a friend who talks, listens, knows your voice, and is always there for you.
 
-BEASTT is a voice **and** text AI assistant that runs on a **free, local** language model (via [Ollama](https://ollama.com)) — private, offline-capable, and no API costs. It's built to feel less like a tool and more like a friend: it welcomes you by name, chats naturally, remembers the conversation, searches the web for live info, and responds to **only your voice**.
+JARVIS is a voice **and** text AI assistant that runs on a **free, local** language model (via [Ollama](https://ollama.com)) — private, offline-capable, and no API costs. It's built to feel less like a tool and more like a friend: it welcomes you by name, chats naturally, remembers the conversation, searches the web for live info, and responds to **only your voice**.
 
 ## ✨ Features
 
@@ -114,12 +114,12 @@ Each utterance prints its decision, so it's easy to verify and tune:
 python main.py --wake
 ```
 
-BEASTT idles quietly, listening only for **"BEASTT"**. When you call it, it asks
+BEASTT idles quietly, listening only for **"JARVIS"**. When you call it, it asks
 whether you want to talk by **voice** or by **text**, has the conversation, then
 slips back to standby when you say goodbye.
 
 - Combine with `--my-voice` so only *your* voice can wake it.
-- Say it all in one breath — *"BEASTT, what's the weather?"* — and it wakes **and**
+- Say it all in one breath — *"JARVIS, what's the weather?"* — and it wakes **and**
   answers straight away.
 - Skip the question with `--on-wake voice` or `--on-wake text`.
 - Standby uses the fast `tiny` Whisper model to stay light on CPU, then switches
@@ -160,14 +160,31 @@ python main.py --wake --service      # run headless right now
 
 Stop a running background BEASTT with Task Manager (end the `pythonw.exe` task).
 
+## ✏️ Renaming your assistant
+
+The name is configuration, not code. Set it in `.env`:
+
+```
+BEASTT_NAME=JARVIS
+```
+
+That single value changes the banner, how it introduces itself, and **what it
+answers to** — wake words are derived from the name (including likely
+mishearings, e.g. "Jervis"/"Javis" for JARVIS). Add your own spellings with
+`BEASTT_WAKE_WORDS=jarv,jaris`.
+
+Environment variables accept either the `JARVIS_` or `BEASTT_` prefix, so older
+configs keep working.
+
 ## ⚙️ Configuration
 
 Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 
 | Setting | Env var | Default |
 |---------|---------|---------|
+| Assistant name / wake word | `BEASTT_NAME` | `JARVIS` |
 | Model | `BEASTT_MODEL` | `llama3.2` |
-| What BEASTT calls you | `BEASTT_USER_NAME` | `friend` |
+| What it calls you | `BEASTT_USER_NAME` | `friend` |
 | Voice on/off | `BEASTT_VOICE` | `off` |
 | Speaking speed | `BEASTT_TTS_RATE` | `175` |
 | Whisper model | `BEASTT_STT_MODEL` | `base` (`small` is more accurate) |
@@ -205,4 +222,4 @@ Type or speak naturally. Say `bye`, `quit`, or `see you later` (or press Ctrl+C)
 
 ---
 
-Built with ❤️ as your own personal JARVIS.
+Built with ❤️ as your own personal AI companion.

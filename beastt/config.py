@@ -22,8 +22,12 @@ except Exception:  # dotenv is optional; defaults still work without it.
 
 
 def _get(name: str, default: str) -> str:
-    value = os.environ.get(name)
-    return value if value not in (None, "") else default
+    """Read a setting, accepting either the JARVIS_ or legacy BEASTT_ prefix."""
+    for key in (name.replace("BEASTT_", "JARVIS_", 1), name):
+        value = os.environ.get(key)
+        if value not in (None, ""):
+            return value
+    return default
 
 
 @dataclass
@@ -31,7 +35,7 @@ class Config:
     """Everything BEASTT needs to know about itself and its environment."""
 
     # Identity
-    name: str = _get("BEASTT_NAME", "BEASTT")
+    name: str = _get("BEASTT_NAME", "JARVIS")
     user_name: str = _get("BEASTT_USER_NAME", "friend")
 
     # Brain (Ollama)
@@ -47,6 +51,15 @@ class Config:
     wake_model: str = _get("BEASTT_WAKE_MODEL", "tiny")   # small+fast for standby
     # What to do once woken: ask | voice | text
     on_wake: str = _get("BEASTT_ON_WAKE", "ask").lower()
+    # Extra spellings to accept as the wake word (comma separated).
+    extra_wake_words: str = _get("BEASTT_WAKE_WORDS", "")
+
+    def wake_words(self) -> tuple:
+        """Spellings that should wake the assistant, derived from its name."""
+        from .wake import variants_for
+
+        extra = [w for w in self.extra_wake_words.split(",") if w.strip()]
+        return variants_for(self.name, extra)
 
     # Memory
     max_history_messages: int = int(_get("BEASTT_MAX_HISTORY", "20"))

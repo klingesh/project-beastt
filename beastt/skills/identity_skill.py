@@ -9,7 +9,7 @@ from .base import Skill
 
 _PATTERN = re.compile(
     r"""^\s*
-    (?:hey\s+|ok\s+)?(?:beastt[\s,]*)?
+    (?:hey\s+|ok\s+)?(?:[a-z]{4,10}[\s,]+)?
     (?:so\s+|and\s+)?
     (?:
         who\s+are\s+you
@@ -33,7 +33,9 @@ class IdentitySkill(Skill):
         return bool(_PATTERN.match(text))
 
     def run(self, text: str) -> str:
+        # Only address the user by name when we actually know it.
+        address = "" if self._user.lower() in ("friend", "", "user") else f", {self._user}"
         return (
-            f"I'm {self._name} -- your personal AI companion and friend. "
-            f"Think of me as your own JARVIS, {self._user}. I'm always here for you."
+            f"I'm {self._name} -- your personal AI companion and friend{address}. "
+            "I'm always here for you."
         )

@@ -1,49 +1,75 @@
-"""Wake word detection -- BEASTT idles until you call its name.
+"""Wake word detection -- the assistant idles until you call its name.
 
-Speech-to-text output is fuzzy ("beastt" comes back as "beast", "beast t",
-"biest", "Beasty!"), so matching is tolerant: we compare each spoken word to a
-set of wake variants using a similarity ratio rather than exact equality.
+Speech-to-text output is fuzzy (a name comes back with different spellings each
+time), so matching is tolerant: each spoken word is compared to a set of
+variants using a similarity ratio rather than exact equality.
 
-Anything the user says *after* the wake word is preserved, so "BEASTT, what's
-the weather?" both wakes it and asks the question in one breath.
+The wake words are derived from the configured assistant name, so renaming the
+assistant automatically changes what it answers to. Extra spellings can be
+added via BEASTT_WAKE_WORDS.
+
+Anything said *after* the wake word is preserved, so "Jarvis, what's the
+weather?" both wakes it and asks the question in one breath.
 """
 
 from __future__ import annotations
 
 import difflib
 import re
-from typing import List, Optional, Tuple
+from typing import Iterable, Optional, Tuple
 
-# Canonical spellings we accept as "BEASTT".
-DEFAULT_WAKE_WORDS = ("beastt", "beast", "beasty", "beast", "biest")
+# Common mishearings for names we ship with, keyed by lowercase name.
+_KNOWN_VARIANTS = {
+    "jarvis": ("jarvis", "jervis", "javis", "jarvist", "jarviss", "charvis", "garvis"),
+    "beastt": ("beastt", "beast", "beasty", "biest"),
+    "beast": ("beast", "beastt", "beasty", "biest"),
+}
 
-# How similar a spoken word must be to count (0-1). Kept high because common
-# words like "best" and "beans" are otherwise close enough to "beast" to trigger.
+# How similar a spoken word must be to count (0-1). Kept high so everyday
+# lookalikes (e.g. "best" vs "beast") don't trigger a false wake.
 _SIMILARITY = 0.85
-
-# Minimum length for a candidate, which rules out short lookalikes ("best").
-_MIN_LEN = 5
 
 # Filler that may precede the name.
 _PREFIX = re.compile(r"^(?:hey|hi|hello|ok|okay|yo|hai)\s+", re.IGNORECASE)
 
 
-def _normalise(text: str) -> str:
-    return re.sub(r"[^a-z0-9\s]", " ", (text or "").lower()).strip()
+def variants_for(name: str, extra: Iterable[str] = ()) -> tuple:
+    """Build the set of spellings that should wake the assistant."""
+    low = (name or "").strip().lower()
+    words = set(_KNOWN_VARIANTS.get(low, (low,)))
+    words.add(low)
+    words.update(w.strip().lower() for w in extra if w and w.strip())
+    return tuple(w for w in words if w)
 
 
-def _is_wake_token(token: str, wake_words) -> bool:
-    if len(token) < _MIN_LEN:
+DEFAULT_WAKE_WORDS = variants_for("jarvis")
+
+
+def _min_len(wake_words) -> int:
+    shortest = min((len(w) for w in wake_words), default=5)
+    return max(4, shortest - 1)
+
+
+def _prefixes(wake_words) -> set:
+    """Leading stems, so 'jarvis'/'jarvist' both match but 'jars' doesn't."""
+    return {w[:4] for w in wake_words if len(w) >= 5}
+
+
+def _is_wake_token(token: str, wake_words, min_len: int, prefixes: set) -> bool:
+    if len(token) < min_len:
         return False
     if token in wake_words:
         return True
-    # "beasts", "beastt", "beastie"... but not "beans"/"beautiful".
-    if token.startswith("beas"):
+    if any(token.startswith(p) for p in prefixes):
         return True
     for wake in wake_words:
         if difflib.SequenceMatcher(None, token, wake).ratio() >= _SIMILARITY:
             return True
     return False
+
+
+def _normalise(text: str) -> str:
+    return re.sub(r"[^a-z0-9\s]", " ", (text or "").lower()).strip()
 
 
 def detect(text: str, wake_words=DEFAULT_WAKE_WORDS) -> Tuple[bool, str]:
@@ -58,13 +84,19 @@ def detect(text: str, wake_words=DEFAULT_WAKE_WORDS) -> Tuple[bool, str]:
 
     norm = _PREFIX.sub("", norm)
     words = norm.split()
+    min_len = _min_len(wake_words)
+    prefixes = _prefixes(wake_words)
 
-    # Also catch "b east" style splits by testing joined pairs.
+    # Also catch split-up transcriptions ("jar vis") by testing joined pairs.
     for idx, word in enumerate(words):
-        if _is_wake_token(word, wake_words):
+        if _is_wake_token(word, wake_words, min_len, prefixes):
             return True, " ".join(words[idx + 1 :]).strip()
-        if idx + 1 < len(words) and _is_wake_token(word + words[idx + 1], wake_words):
-            return True, " ".join(words[idx + 2 :]).strip()
+        # Joined pairs are matched strictly (exact or stem only). Fuzzy matching
+        # here would fire on innocent phrases -- "java is" joins to "javais".
+        if idx + 1 < len(words):
+            joined = word + words[idx + 1]
+            if joined in wake_words or any(joined.startswith(p) for p in prefixes):
+                return True, " ".join(words[idx + 2 :]).strip()
 
     return False, ""
 
@@ -94,7 +126,6 @@ def parse_mode_choice(text: str) -> Optional[str]:
         return "text"
     if voice_hit:
         return "voice"
-    # Single-letter answers.
     if norm in ("t", "txt"):
         return "text"
     if norm in ("v",):

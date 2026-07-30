@@ -19,14 +19,11 @@ from pathlib import Path
 from .assistant import Assistant
 from .config import Config
 
-_BANNER = r"""
-  ____  _____ _    ____ _____ _____
- | __ )| ____| |  / ___|_   _|_   _|
- |  _ \|  _| | | | |     | |   | |
- | |_) | |___| |_| |___  | |   | |
- |____/|_____|_____\____| |_|   |_|
-   your personal AI friend
-"""
+def _banner(name: str) -> str:
+    """A simple name-agnostic banner, so renaming the assistant just works."""
+    spaced = "  ".join(name.upper())
+    line = "=" * (len(spaced) + 8)
+    return f"\n{line}\n    {spaced}\n{line}\n   your personal AI friend\n"
 
 # Single words that mean "goodbye" on their own.
 _EXIT_WORDS = {"bye", "byebye", "goodbye", "exit", "quit", "stop", "goodnight"}
@@ -36,7 +33,7 @@ _EXIT_PHRASES = {"see you", "see ya", "see you later", "good night", "talk later
 
 def _parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="beastt", description="BEASTT -- your JARVIS-style AI companion."
+        prog="assistant", description="Your personal JARVIS-style AI companion."
     )
     p.add_argument(
         "--voice",
@@ -309,7 +306,9 @@ def _run_standby(config: Config, verbose: bool) -> None:
     if config.stt_model != config.wake_model:
         chat_stt = SpeechToText(model=config.stt_model, speaker_verifier=verifier)
 
+    wake_words = config.wake_words()
     print(f"\n[wake] Standby. Call \"{config.name}\" whenever you need me.")
+    print(f"       (Listening for: {', '.join(wake_words)})")
     print("       (Ctrl+C to shut down.)\n")
 
     while True:
@@ -322,7 +321,7 @@ def _run_standby(config: Config, verbose: bool) -> None:
         if not heard:
             continue
 
-        woken, remainder = detect(heard)
+        woken, remainder = detect(heard, wake_words)
         if not woken:
             continue
 
@@ -444,7 +443,7 @@ def run(argv=None) -> None:
         return
 
     if verbose:
-        print(_BANNER)
+        print(_banner(config.name))
 
     # Standby mode manages its own assistants per conversation.
     if args.wake:

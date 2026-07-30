@@ -20,7 +20,7 @@ SAMPLE_RATE = 16000
 _CLIP_SECONDS = 5.0
 
 _OWNER_PHRASES = [
-    "Hey BEASTT, it's me. I'm the one you should listen to.",
+    "Hey there, it's me. I'm the one you should listen to.",
     "The quick brown fox jumps over the lazy dog every single morning.",
     "I love building cool things with technology and solving hard problems.",
     "Today is a great day to talk with my assistant about anything at all.",
@@ -29,7 +29,7 @@ _OWNER_PHRASES = [
 ]
 
 _OTHER_PHRASES = [
-    "Hello BEASTT, this is somebody else speaking to you right now.",
+    "Hello there, this is somebody else speaking to you right now.",
     "The quick brown fox jumps over the lazy dog every single morning.",
     "I am not the owner of this assistant, so please do not listen to me.",
     "One two three four five, six seven eight nine ten, this is a different voice.",

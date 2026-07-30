@@ -14,7 +14,7 @@ from .base import Skill
 
 _PATTERN = re.compile(
     r"""^\s*
-    (?:hey\s+|ok\s+)?(?:beastt[\s,]*)?          # optional address
+    (?:hey\s+|ok\s+)?(?:[a-z]{4,10}[\s,]+)?          # optional address
     (?:please\s+)?
     (?:
         (?:what(?:'?s|\s+is)?\s+)?(?:the\s+)?(?:current\s+)?time(?:\s+is\s+it)?
