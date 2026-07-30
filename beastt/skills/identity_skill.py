@@ -7,18 +7,30 @@ import re
 from .base import Skill
 
 
+_PATTERN = re.compile(
+    r"""^\s*
+    (?:hey\s+|ok\s+)?(?:beastt[\s,]*)?
+    (?:so\s+|and\s+)?
+    (?:
+        who\s+are\s+you
+      | what(?:'?s|\s+is)\s+your\s+name
+      | what\s+are\s+you\s+called
+      | (?:tell|remind)\s+me\s+your\s+name
+    )
+    \s*[?.!]*\s*$""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
 class IdentitySkill(Skill):
     name = "identity"
-    _pattern = re.compile(
-        r"\b(who are you|what('?s| is) your name|what are you called)\b", re.IGNORECASE
-    )
 
     def __init__(self, config):
         self._name = config.name
         self._user = config.user_name
 
     def matches(self, text: str) -> bool:
-        return bool(self._pattern.search(text))
+        return bool(_PATTERN.match(text))
 
     def run(self, text: str) -> str:
         return (
