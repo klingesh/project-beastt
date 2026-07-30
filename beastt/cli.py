@@ -96,7 +96,13 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument(
         "--my-voice",
         action="store_true",
-        help="Respond to only your enrolled voice, ignoring other speakers.",
+        help="(Advanced) Respond only to your enrolled voice. Needs --enroll-other "
+             "to be reliable; off by default.",
+    )
+    p.add_argument(
+        "--no-voice-lock",
+        action="store_true",
+        help="Respond to any voice, overriding BEASTT_MY_VOICE_ONLY in .env.",
     )
     return p.parse_args(argv)
 
@@ -112,6 +118,9 @@ def _build_config(args: argparse.Namespace) -> Config:
     if args.my_voice:
         config.speaker_only = True
         config.voice_enabled = True
+    # Explicit opt-out always wins, so a stale .env can't lock the user out.
+    if args.no_voice_lock:
+        config.speaker_only = False
     if args.on_wake:
         config.on_wake = args.on_wake
     # Standby mode always needs the mic.
@@ -430,7 +439,10 @@ def run(argv=None) -> None:
             autostart.uninstall()
         else:
             extra = "--on-wake voice" if config.on_wake == "voice" else ""
-            lock = "--my-voice" if config.speaker_only else ""
+            # Only enable the voice lock in the installed command when it was
+            # explicitly asked for; it's off by default because a mismatch
+            # silently stops the assistant from responding at all.
+            lock = "--my-voice" if (args.my_voice and config.speaker_only) else ""
             autostart.install(" ".join(x for x in ["--wake", lock, "--service", extra] if x))
         return
 

@@ -79,102 +79,36 @@ python main.py --voice
 > **Note:** we use `sounddevice` rather than PyAudio because it bundles its own
 > audio engine — no C++ compiler needed, which matters on Windows / new Pythons.
 
-## 🔐 Voice lock — respond to only your voice
+## 🔐 Voice lock (advanced, optional)
 
-Install the voiceprint engine (skipping `webrtcvad`, which needs a compiler and
-that BEASTT doesn't actually use):
+> **Off by default, and worth skipping.** Speaker verification is genuinely
+> unreliable for similar-sounding voices: when it misjudges, the assistant simply
+> stops responding to you, which is far more annoying than the feature is useful.
+> The wake word already keeps it from reacting to ordinary conversation.
+
+If you still want it, install the voiceprint engine (skipping `webrtcvad`, which
+needs a compiler and isn't actually used):
 
 ```bash
 pip install librosa
 pip install --no-deps resemblyzer
 ```
 
-Then:
+```bash
+python main.py --enroll         # 1. record your voice
+python main.py --enroll-other   # 2. REQUIRED: record other voices to reject
+python main.py --wake --my-voice
+```
+
+**Step 2 is not optional in practice.** Without a cohort to compare against,
+verification falls back to a fixed similarity threshold that rejects the owner
+about as often as anyone else.
+
+Locked out? Override it any time:
 
 ```bash
-python main.py --enroll         # 1. record YOUR voice
-python main.py --enroll-other   # 2. record a friend's voice as "not me"
-python main.py --my-voice       # 3. BEASTT now answers only you
+python main.py --wake --no-voice-lock
 ```
-
-**Step 2 is the important one.** A fixed similarity threshold can't reliably
-separate two similar-sounding people. Instead BEASTT compares: *does this sound
-more like the owner, or more like a known other person?* Run `--enroll-other`
-once per additional person to sharpen the lock further.
-
-Each utterance prints its decision, so it's easy to verify and tune:
-
-```
-[voice] match: you 0.88 vs others 0.72 (need lead 0.04)
-```
-
-## 👂 Standby mode — just call its name
-
-```bash
-python main.py --wake
-```
-
-BEASTT idles quietly, listening only for **"JARVIS"**. When you call it, it asks
-whether you want to talk by **voice** or by **text**, has the conversation, then
-slips back to standby when you say goodbye.
-
-- Combine with `--my-voice` so only *your* voice can wake it.
-- Say it all in one breath — *"JARVIS, what's the weather?"* — and it wakes **and**
-  answers straight away.
-- Skip the question with `--on-wake voice` or `--on-wake text`.
-- Standby uses the fast `tiny` Whisper model to stay light on CPU, then switches
-  to your normal `BEASTT_STT_MODEL` for the actual conversation.
-- Ctrl+C shuts it down.
-
-## 🤖 Always-on mode (like "Hey Google")
-
-Make BEASTT start with Windows and sit invisibly in the background, ready whenever
-you call its name:
-
-```bash
-python main.py --install-startup --my-voice
-```
-
-That's it. From the next login, BEASTT is always listening for you.
-
-- **No window** — it runs under `pythonw.exe`, launched by a hidden `.vbs` shim in
-  your Startup folder (per-user, no admin rights).
-- **Chimes instead of a screen** — a rising two-tone chime means "I'm listening",
-  a falling one means "back to standby".
-- **Self-healing** — the standby loop is supervised and restarts with backoff if
-  something (like the mic) fails.
-- **Logs** — everything goes to `beastt_memory/beastt.log`.
-
-Start it immediately without rebooting:
-
-```bash
-wscript "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\BEASTT.vbs"
-```
-
-Manage it:
-
-```bash
-python main.py --uninstall-startup   # stop starting with Windows
-python main.py --wake --service      # run headless right now
-```
-
-Stop a running background BEASTT with Task Manager (end the `pythonw.exe` task).
-
-## ✏️ Renaming your assistant
-
-The name is configuration, not code. Set it in `.env`:
-
-```
-BEASTT_NAME=JARVIS
-```
-
-That single value changes the banner, how it introduces itself, and **what it
-answers to** — wake words are derived from the name (including likely
-mishearings, e.g. "Jervis"/"Javis" for JARVIS). Add your own spellings with
-`BEASTT_WAKE_WORDS=jarv,jaris`.
-
-Environment variables accept either the `JARVIS_` or `BEASTT_` prefix, so older
-configs keep working.
 
 ## ⚙️ Configuration
 
@@ -189,7 +123,7 @@ Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 | Speaking speed | `BEASTT_TTS_RATE` | `175` |
 | Whisper model | `BEASTT_STT_MODEL` | `base` (`small` is more accurate) |
 | Web search | `BEASTT_SEARCH` | `on` |
-| Voice lock | `BEASTT_MY_VOICE_ONLY` | `off` |
+| Voice lock (advanced) | `BEASTT_MY_VOICE_ONLY` | `off` |
 | Voice-lead margin | `BEASTT_SPEAKER_MARGIN` | `0.04` |
 
 ## 🧩 Adding a new skill
