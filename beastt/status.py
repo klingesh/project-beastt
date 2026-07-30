@@ -14,30 +14,61 @@ import sys
 from pathlib import Path
 
 from .config import Config
-
-_LOG = Path("beastt_memory") / "beastt.log"
+from .paths import log_file, pid_file, resolve
 
 
 def _ok(flag: bool) -> str:
     return "OK " if flag else "NO "
 
 
-def _running() -> list:
-    """Return PIDs of python processes that look like a BEASTT service."""
-    pids = []
+def _pid_alive(pid: int) -> bool:
+    """Is a process with this PID running? (No wmic -- it's gone on new Windows.)"""
     try:
         if sys.platform == "win32":
             out = subprocess.run(
-                ["wmic", "process", "where",
-                 "name='pythonw.exe' or name='python.exe'",
-                 "get", "ProcessId,CommandLine", "/format:csv"],
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                 capture_output=True, text=True, timeout=20,
             ).stdout
-            for line in out.splitlines():
-                if "main.py" in line and "--wake" in line:
-                    parts = [p for p in line.strip().split(",") if p]
-                    if parts and parts[-1].isdigit():
-                        pids.append(parts[-1])
+            return str(pid) in out
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _running() -> list:
+    """Return PIDs of live BEASTT services.
+
+    Primary source is the PID file the service writes. We fall back to scanning
+    the process list with PowerShell, because `wmic` has been removed from
+    current Windows builds.
+    """
+    pids = []
+
+    pf = pid_file()
+    if pf.exists():
+        try:
+            pid = int(pf.read_text(encoding="utf-8").strip())
+            if _pid_alive(pid):
+                pids.append(str(pid))
+        except Exception:
+            pass
+    if pids:
+        return pids
+
+    try:
+        if sys.platform == "win32":
+            script = (
+                "Get-CimInstance Win32_Process -Filter "
+                "\"Name='pythonw.exe' or Name='python.exe'\" "
+                "| Where-Object { $_.CommandLine -like '*main.py*--wake*' } "
+                "| Select-Object -ExpandProperty ProcessId"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", script],
+                capture_output=True, text=True, timeout=30,
+            ).stdout
+            pids = [line.strip() for line in out.splitlines() if line.strip().isdigit()]
         else:
             out = subprocess.run(["ps", "-eo", "pid,args"],
                                  capture_output=True, text=True, timeout=20).stdout
@@ -84,7 +115,7 @@ def report() -> None:
             print(f"[NO ] {module} missing -- {hint}")
 
     # 4. Voiceprint
-    vp = Path(config.voiceprint_path)
+    vp = resolve(config.voiceprint_path)
     legacy = vp.with_suffix(".npy")
     has_vp = vp.exists() or legacy.exists()
     print(f"[{_ok(has_vp)}] Voiceprint enrolled")
@@ -102,14 +133,15 @@ def report() -> None:
         print(f"[NO ] Couldn't check Ollama ({exc})")
 
     # 6. Memory
-    mem = Path(config.memory_path)
+    mem = resolve(config.memory_path)
     print(f"[{_ok(mem.exists())}] Long-term memory file ({mem})")
 
     # 7. Log tail
-    print(f"\n--- last lines of {_LOG} ---")
-    if _LOG.exists():
+    log = log_file()
+    print(f"\n--- last lines of {log} ---")
+    if log.exists():
         try:
-            lines = _LOG.read_text(encoding="utf-8", errors="replace").splitlines()
+            lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
             for line in lines[-20:]:
                 print(f"  {line}")
             if not lines:

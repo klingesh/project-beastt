@@ -43,10 +43,20 @@ def _vbs_contents(args: str) -> str:
     py = _pythonw().replace('"', '""')
     root = str(project_root()).replace('"', '""')
     main = str(project_root() / "main.py").replace('"', '""')
+    fail_log = str(project_root() / "beastt_memory" / "launch_error.txt").replace('"', '""')
+    # On error, leave a breadcrumb: a silent failure is otherwise invisible.
     return (
+        'On Error Resume Next\r\n'
         'Set shell = CreateObject("WScript.Shell")\r\n'
         f'shell.CurrentDirectory = "{root}"\r\n'
         f'shell.Run """{py}"" ""{main}"" {args}", 0, False\r\n'
+        'If Err.Number <> 0 Then\r\n'
+        '  Set fso = CreateObject("Scripting.FileSystemObject")\r\n'
+        f'  Set f = fso.CreateTextFile("{fail_log}", True)\r\n'
+        '  f.WriteLine "Launch failed: " & Err.Number & " " & Err.Description\r\n'
+        f'  f.WriteLine "Command: {py} {main} {args}"\r\n'
+        '  f.Close\r\n'
+        'End If\r\n'
     )
 
 

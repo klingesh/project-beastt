@@ -38,7 +38,11 @@ class LongTermMemory:
     """A tiny persistent fact store with relevance-based recall."""
 
     def __init__(self, path: str = "beastt_memory/memory.json", max_facts: int = 300):
-        self.path = path
+        # Resolve against the project so a background service launched from an
+        # arbitrary directory still finds the same memory file.
+        from .paths import resolve
+
+        self.path = str(resolve(path))
         self.max_facts = max_facts
         self.facts: List[Dict] = []
         self._load()

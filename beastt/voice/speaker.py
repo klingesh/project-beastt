@@ -65,7 +65,11 @@ class SpeakerVerifier:
         threshold: float = 0.80,
         margin: float = 0.04,
     ):
-        self.voiceprint_path = voiceprint_path
+        from ..paths import resolve
+
+        # Project-relative, so a background service started from another
+        # directory still finds the enrolled voiceprint.
+        self.voiceprint_path = str(resolve(voiceprint_path))
         self.threshold = threshold          # used when no imposters enrolled
         self.margin = margin                # required owner-vs-imposter lead
         self.available = False

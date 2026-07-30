@@ -11,8 +11,12 @@ from dataclasses import dataclass
 
 try:
     from dotenv import load_dotenv
+    from pathlib import Path as _Path
 
-    load_dotenv()
+    # Load the project's .env explicitly: a background service may be started
+    # from any working directory, where a bare load_dotenv() would find nothing.
+    _env = _Path(__file__).resolve().parent.parent / ".env"
+    load_dotenv(_env if _env.exists() else None)
 except Exception:  # dotenv is optional; defaults still work without it.
     pass
 
