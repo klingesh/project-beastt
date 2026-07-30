@@ -65,6 +65,21 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     p.add_argument("--quiet", action="store_true", help="Hide startup diagnostics.")
     p.add_argument(
+        "--service",
+        action="store_true",
+        help="Run headless in the background (logs to a file, auto-restarts).",
+    )
+    p.add_argument(
+        "--install-startup",
+        action="store_true",
+        help="Start BEASTT automatically when you log in, hidden in the background.",
+    )
+    p.add_argument(
+        "--uninstall-startup",
+        action="store_true",
+        help="Stop BEASTT from starting automatically.",
+    )
+    p.add_argument(
         "--enroll",
         action="store_true",
         help="Record your voiceprint so BEASTT can recognise only your voice.",
@@ -229,6 +244,7 @@ def _ask_mode(config: Config, tts, wake_stt) -> str:
 
 def _run_standby(config: Config, verbose: bool) -> None:
     """Idle listening for the wake word; start a chat when called."""
+    from .notify import chime_sleep, chime_wake
     from .voice import SpeechToText, TextToSpeech
     from .wake import detect
 
@@ -264,6 +280,7 @@ def _run_standby(config: Config, verbose: bool) -> None:
             continue
 
         print(f"[wake] Heard you: {heard!r}")
+        chime_wake()  # audible "I'm listening", since there may be no window
 
         # Decide how to converse.
         mode = config.on_wake
@@ -288,6 +305,7 @@ def _run_standby(config: Config, verbose: bool) -> None:
         else:
             _chat_session(assistant, config, session_tts, session_stt)
 
+        chime_sleep()
         print(f"\n[wake] Back on standby. Call \"{config.name}\" anytime.\n")
 
 
@@ -330,11 +348,30 @@ def run(argv=None) -> None:
     config = _build_config(args)
     verbose = not args.quiet
 
+    # Autostart management, then exit.
+    if args.install_startup or args.uninstall_startup:
+        from . import autostart
+
+        if args.uninstall_startup:
+            autostart.uninstall()
+        else:
+            extra = "--on-wake voice" if config.on_wake == "voice" else ""
+            lock = "--my-voice" if config.speaker_only else ""
+            autostart.install(" ".join(x for x in ["--wake", lock, "--service", extra] if x))
+        return
+
     # One-time voice enrollment, then exit.
     if args.enroll or args.enroll_other:
         from .enroll import run_enrollment
 
         run_enrollment(config, as_imposter=args.enroll_other)
+        return
+
+    # Background service: supervised standby with file logging.
+    if args.service:
+        from .service import run_service
+
+        run_service(config)
         return
 
     if verbose:

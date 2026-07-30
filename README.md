@@ -126,6 +126,40 @@ slips back to standby when you say goodbye.
   to your normal `BEASTT_STT_MODEL` for the actual conversation.
 - Ctrl+C shuts it down.
 
+## 🤖 Always-on mode (like "Hey Google")
+
+Make BEASTT start with Windows and sit invisibly in the background, ready whenever
+you call its name:
+
+```bash
+python main.py --install-startup --my-voice
+```
+
+That's it. From the next login, BEASTT is always listening for you.
+
+- **No window** — it runs under `pythonw.exe`, launched by a hidden `.vbs` shim in
+  your Startup folder (per-user, no admin rights).
+- **Chimes instead of a screen** — a rising two-tone chime means "I'm listening",
+  a falling one means "back to standby".
+- **Self-healing** — the standby loop is supervised and restarts with backoff if
+  something (like the mic) fails.
+- **Logs** — everything goes to `beastt_memory/beastt.log`.
+
+Start it immediately without rebooting:
+
+```bash
+wscript "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\BEASTT.vbs"
+```
+
+Manage it:
+
+```bash
+python main.py --uninstall-startup   # stop starting with Windows
+python main.py --wake --service      # run headless right now
+```
+
+Stop a running background BEASTT with Task Manager (end the `pythonw.exe` task).
+
 ## ⚙️ Configuration
 
 Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
