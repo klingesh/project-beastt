@@ -45,6 +45,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="Record your voiceprint so BEASTT can recognise only your voice.",
     )
     p.add_argument(
+        "--enroll-other",
+        action="store_true",
+        help="Teach BEASTT another person's voice to reject (improves accuracy a lot).",
+    )
+    p.add_argument(
         "--my-voice",
         action="store_true",
         help="Respond to only your enrolled voice, ignoring other speakers.",
@@ -90,10 +95,10 @@ def run(argv=None) -> None:
     verbose = not args.quiet
 
     # One-time voice enrollment, then exit.
-    if args.enroll:
+    if args.enroll or args.enroll_other:
         from .enroll import run_enrollment
 
-        run_enrollment(config)
+        run_enrollment(config, as_imposter=args.enroll_other)
         return
 
     if verbose:
@@ -114,7 +119,9 @@ def run(argv=None) -> None:
             from .voice import SpeakerVerifier
 
             verifier = SpeakerVerifier(
-                config.voiceprint_path, threshold=config.speaker_threshold
+                config.voiceprint_path,
+                threshold=config.speaker_threshold,
+                margin=config.speaker_margin,
             )
             if not verifier.available:
                 print("[voice] Speaker recognition off (Resemblyzer not installed).")
@@ -124,8 +131,11 @@ def run(argv=None) -> None:
                     "[voice] No voiceprint found -- responding to all voices. "
                     "Run `python main.py --enroll` first to lock it to your voice."
                 )
+            elif verifier.has_cohort:
+                print("[voice] Voice lock ON (comparing against known other voices).")
             else:
-                print("[voice] Voice lock ON -- I'll only respond to your voice.")
+                print("[voice] Voice lock ON -- but accuracy is much better if you")
+                print("        also run: python main.py --enroll-other")
 
         stt = SpeechToText(model=config.stt_model, speaker_verifier=verifier)
         if not stt.available:

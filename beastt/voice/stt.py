@@ -85,11 +85,8 @@ class SpeechToText:
 
             # Only respond to the owner's voice, if enrolled.
             if self._verifier is not None and getattr(self._verifier, "enrolled", False):
-                ok, score = self._verifier.verify(audio)
-                print(
-                    f"[voice] voice match: {score:.2f} "
-                    f"(need >= {self._verifier.threshold:.2f})"
-                )
+                ok, _score = self._verifier.verify(audio)
+                print(f"[voice] match: {self._verifier.explain(audio)}")
                 if not ok:
                     print("[voice] (ignored -- doesn't sound like you)")
                     return ""
