@@ -66,17 +66,25 @@ class SpeechToText:
             )
 
     # --- public API -------------------------------------------------------
-    def listen(self, prompt: str = "Listening...") -> Optional[str]:
+    def listen(
+        self,
+        prompt: str = "Listening...",
+        quiet: bool = False,
+        start_timeout: float = 8.0,
+    ) -> Optional[str]:
         """Capture one spoken utterance and transcribe it.
 
         Returns transcribed text, "" if nothing usable was heard (noise, or a
         voice that isn't the enrolled owner), or None if STT isn't available.
+        `quiet` suppresses the per-utterance logging, which keeps standby mode
+        from spamming the terminal while it waits for the wake word.
         """
         if not self.available:
             return None
         try:
-            print(f"[voice] {prompt}")
-            audio = self._record_until_silence()
+            if not quiet:
+                print(f"[voice] {prompt}")
+            audio = self._record_until_silence(start_timeout=start_timeout)
 
             # Not enough actual voiced audio -- likely a transient noise.
             min_len = int(0.4 * SAMPLE_RATE)
@@ -86,9 +94,11 @@ class SpeechToText:
             # Only respond to the owner's voice, if enrolled.
             if self._verifier is not None and getattr(self._verifier, "enrolled", False):
                 ok, _score = self._verifier.verify(audio)
-                print(f"[voice] match: {self._verifier.explain(audio)}")
+                if not quiet:
+                    print(f"[voice] match: {self._verifier.explain(audio)}")
                 if not ok:
-                    print("[voice] (ignored -- doesn't sound like you)")
+                    if not quiet:
+                        print("[voice] (ignored -- doesn't sound like you)")
                     return ""
 
             result = self._model.transcribe(audio, fp16=False, language="en")

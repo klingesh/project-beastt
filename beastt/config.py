@@ -39,6 +39,11 @@ class Config:
     tts_rate: int = int(_get("BEASTT_TTS_RATE", "175"))
     stt_model: str = _get("BEASTT_STT_MODEL", "base")
 
+    # Wake word / standby mode
+    wake_model: str = _get("BEASTT_WAKE_MODEL", "tiny")   # small+fast for standby
+    # What to do once woken: ask | voice | text
+    on_wake: str = _get("BEASTT_ON_WAKE", "ask").lower()
+
     # Memory
     max_history_messages: int = int(_get("BEASTT_MAX_HISTORY", "20"))
 

@@ -108,6 +108,24 @@ Each utterance prints its decision, so it's easy to verify and tune:
 [voice] match: you 0.88 vs others 0.72 (need lead 0.04)
 ```
 
+## 👂 Standby mode — just call its name
+
+```bash
+python main.py --wake
+```
+
+BEASTT idles quietly, listening only for **"BEASTT"**. When you call it, it asks
+whether you want to talk by **voice** or by **text**, has the conversation, then
+slips back to standby when you say goodbye.
+
+- Combine with `--my-voice` so only *your* voice can wake it.
+- Say it all in one breath — *"BEASTT, what's the weather?"* — and it wakes **and**
+  answers straight away.
+- Skip the question with `--on-wake voice` or `--on-wake text`.
+- Standby uses the fast `tiny` Whisper model to stay light on CPU, then switches
+  to your normal `BEASTT_STT_MODEL` for the actual conversation.
+- Ctrl+C shuts it down.
+
 ## ⚙️ Configuration
 
 Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.

@@ -1,4 +1,13 @@
-"""Command-line interface for BEASTT -- runs the text or voice chat loop."""
+"""Command-line interface for BEASTT.
+
+Three ways to run:
+  * text chat        -- `python main.py --text`
+  * voice chat       -- `python main.py --voice` / `--my-voice`
+  * standby (wake)   -- `python main.py --wake`
+                        BEASTT idles listening for its name, then asks whether
+                        you want to talk by voice or by text, and returns to
+                        standby when the conversation ends.
+"""
 
 from __future__ import annotations
 
@@ -38,6 +47,17 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="Force text-only chat, even if voice is enabled in .env.",
     )
     p.add_argument(
+        "--wake",
+        action="store_true",
+        help="Standby mode: idle until you call 'BEASTT', then choose voice or text.",
+    )
+    p.add_argument(
+        "--on-wake",
+        choices=["ask", "voice", "text"],
+        default=None,
+        help="What to do after waking (default: ask).",
+    )
+    p.add_argument(
         "--model", default=None, help="Override the Ollama model (e.g. qwen3, phi4)."
     )
     p.add_argument(
@@ -73,8 +93,13 @@ def _build_config(args: argparse.Namespace) -> Config:
     if args.my_voice:
         config.speaker_only = True
         config.voice_enabled = True
+    if args.on_wake:
+        config.on_wake = args.on_wake
+    # Standby mode always needs the mic.
+    if args.wake:
+        config.voice_enabled = True
     # --text always wins, so it can override BEASTT_VOICE=on in .env.
-    if args.text:
+    if args.text and not args.wake:
         config.voice_enabled = False
         config.speaker_only = False
     return config
@@ -98,6 +123,208 @@ def _is_exit(text: str) -> bool:
     return any(phrase in norm for phrase in _EXIT_PHRASES)
 
 
+# --- voice setup -----------------------------------------------------------
+def _build_verifier(config: Config, announce: bool = True):
+    """Create the speaker verifier when the voice lock is requested."""
+    if not config.speaker_only:
+        return None
+    from .voice import SpeakerVerifier
+
+    verifier = SpeakerVerifier(
+        config.voiceprint_path,
+        threshold=config.speaker_threshold,
+        margin=config.speaker_margin,
+    )
+    if not verifier.available:
+        print("[voice] Speaker recognition off (Resemblyzer not installed).")
+        return None
+    if not verifier.enrolled:
+        print(
+            "[voice] No voiceprint found -- responding to all voices. "
+            "Run `python main.py --enroll` first to lock it to your voice."
+        )
+    elif announce:
+        if verifier.has_cohort:
+            print("[voice] Voice lock ON (comparing against known other voices).")
+        else:
+            print("[voice] Voice lock ON -- but accuracy is much better if you")
+            print("        also run: python main.py --enroll-other")
+    return verifier
+
+
+# --- the conversation ------------------------------------------------------
+def _chat_session(assistant: Assistant, config: Config, tts, stt) -> None:
+    """Run one conversation until the user says goodbye.
+
+    `stt` is None for a typed session. Returns when the chat ends; the caller
+    decides whether to exit or go back to standby.
+    """
+    greeting = assistant.welcome()
+    print(f"\n{config.name}: {greeting}\n")
+    if tts:
+        tts.say(greeting)
+
+    while True:
+        try:
+            if stt is not None and stt.available:
+                user_text = stt.listen()
+                if user_text:
+                    print(f"You: {user_text}")
+                if not user_text:
+                    continue
+            else:
+                user_text = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print(f"\n{config.name}: Talk soon! I'll be right here.")
+            assistant.remember_session()
+            return
+
+        if not user_text:
+            continue
+
+        if _is_exit(user_text):
+            farewell = f"Take care, {config.user_name}! I'll be here whenever you need me."
+            print(f"{config.name}: {farewell}")
+            if tts:
+                tts.say(farewell)
+            # Reflect on the chat and store anything worth remembering.
+            assistant.remember_session()
+            return
+
+        reply = assistant.respond(user_text)
+        print(f"{config.name}: {reply}\n")
+        if tts:
+            tts.say(reply)
+
+
+# --- standby / wake word ---------------------------------------------------
+def _ask_mode(config: Config, tts, wake_stt) -> str:
+    """Ask the user whether they want voice or text. Returns 'voice' or 'text'."""
+    from .wake import parse_mode_choice
+
+    question = "Yes? Would you like to talk by voice, or by text?"
+    print(f"{config.name}: {question}")
+    if tts:
+        tts.say(question)
+
+    # Try a couple of spoken answers first (hands-free), then fall back to typing.
+    for _ in range(2):
+        spoken = wake_stt.listen(prompt="Say 'voice' or 'text'...", start_timeout=6.0)
+        if spoken:
+            print(f"You: {spoken}")
+            choice = parse_mode_choice(spoken)
+            if choice:
+                return choice
+            nudge = "Sorry, voice or text?"
+            print(f"{config.name}: {nudge}")
+            if tts:
+                tts.say(nudge)
+
+    try:
+        typed = input("Type 'v' for voice or 't' for text [v]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return "voice"
+    return parse_mode_choice(typed) or "voice"
+
+
+def _run_standby(config: Config, verbose: bool) -> None:
+    """Idle listening for the wake word; start a chat when called."""
+    from .voice import SpeechToText, TextToSpeech
+    from .wake import detect
+
+    tts = TextToSpeech(rate=config.tts_rate)
+    verifier = _build_verifier(config)
+
+    # A small, fast model for standby listening; the full model is used in chat.
+    wake_stt = SpeechToText(model=config.wake_model, speaker_verifier=verifier)
+    if not wake_stt.available:
+        print("[wake] Microphone unavailable, so standby mode can't run.")
+        print("       Install voice support:  pip install sounddevice openai-whisper")
+        return
+
+    chat_stt = wake_stt
+    if config.stt_model != config.wake_model:
+        chat_stt = SpeechToText(model=config.stt_model, speaker_verifier=verifier)
+
+    print(f"\n[wake] Standby. Call \"{config.name}\" whenever you need me.")
+    print("       (Ctrl+C to shut down.)\n")
+
+    while True:
+        try:
+            heard = wake_stt.listen(quiet=True, start_timeout=3600.0)
+        except KeyboardInterrupt:
+            print("\n[wake] Shutting down. Bye!")
+            return
+
+        if not heard:
+            continue
+
+        woken, remainder = detect(heard)
+        if not woken:
+            continue
+
+        print(f"[wake] Heard you: {heard!r}")
+
+        # Decide how to converse.
+        mode = config.on_wake
+        if mode not in ("voice", "text"):
+            mode = _ask_mode(config, tts, wake_stt)
+        print(f"[wake] Starting {mode} chat.")
+
+        # A fresh Assistant each time gives a clean conversation but keeps
+        # long-term memory, which lives on disk.
+        assistant = Assistant(config=config, verbose=verbose)
+        session_tts = tts if mode == "voice" else None
+        session_stt = chat_stt if mode == "voice" else None
+
+        # If they said "BEASTT, what's the weather?", answer that straight away.
+        if remainder:
+            print(f"You: {remainder}")
+            reply = assistant.respond(remainder)
+            print(f"{config.name}: {reply}\n")
+            if session_tts:
+                session_tts.say(reply)
+            _continue_session(assistant, config, session_tts, session_stt)
+        else:
+            _chat_session(assistant, config, session_tts, session_stt)
+
+        print(f"\n[wake] Back on standby. Call \"{config.name}\" anytime.\n")
+
+
+def _continue_session(assistant: Assistant, config: Config, tts, stt) -> None:
+    """Continue an already-greeted conversation (used when waking with a question)."""
+    while True:
+        try:
+            if stt is not None and stt.available:
+                user_text = stt.listen()
+                if user_text:
+                    print(f"You: {user_text}")
+                if not user_text:
+                    continue
+            else:
+                user_text = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            assistant.remember_session()
+            return
+
+        if not user_text:
+            continue
+
+        if _is_exit(user_text):
+            farewell = f"Take care, {config.user_name}! I'll be here whenever you need me."
+            print(f"{config.name}: {farewell}")
+            if tts:
+                tts.say(farewell)
+            assistant.remember_session()
+            return
+
+        reply = assistant.respond(user_text)
+        print(f"{config.name}: {reply}\n")
+        if tts:
+            tts.say(reply)
+
+
+# --- entry point -----------------------------------------------------------
 def run(argv=None) -> None:
     args = _parse_args(argv)
     config = _build_config(args)
@@ -113,78 +340,22 @@ def run(argv=None) -> None:
     if verbose:
         print(_BANNER)
 
+    # Standby mode manages its own assistants per conversation.
+    if args.wake:
+        _run_standby(config, verbose)
+        return
+
     assistant = Assistant(config=config, verbose=verbose)
 
-    # Set up voice if requested.
     tts = stt = None
     if config.voice_enabled:
         from .voice import SpeechToText, TextToSpeech
 
         tts = TextToSpeech(rate=config.tts_rate)
-
-        # Optionally restrict listening to the owner's enrolled voice.
-        verifier = None
-        if config.speaker_only:
-            from .voice import SpeakerVerifier
-
-            verifier = SpeakerVerifier(
-                config.voiceprint_path,
-                threshold=config.speaker_threshold,
-                margin=config.speaker_margin,
-            )
-            if not verifier.available:
-                print("[voice] Speaker recognition off (Resemblyzer not installed).")
-                verifier = None
-            elif not verifier.enrolled:
-                print(
-                    "[voice] No voiceprint found -- responding to all voices. "
-                    "Run `python main.py --enroll` first to lock it to your voice."
-                )
-            elif verifier.has_cohort:
-                print("[voice] Voice lock ON (comparing against known other voices).")
-            else:
-                print("[voice] Voice lock ON -- but accuracy is much better if you")
-                print("        also run: python main.py --enroll-other")
-
+        verifier = _build_verifier(config)
         stt = SpeechToText(model=config.stt_model, speaker_verifier=verifier)
         if not stt.available:
             print("[voice] Microphone input unavailable -- falling back to typed input.")
+            stt = None
 
-    # Welcome the user.
-    greeting = assistant.welcome()
-    print(f"\n{config.name}: {greeting}\n")
-    if tts:
-        tts.say(greeting)
-
-    # Main loop.
-    while True:
-        try:
-            if stt and stt.available:
-                user_text = stt.listen()
-                if user_text:
-                    print(f"You: {user_text}")
-                if not user_text:
-                    continue
-            else:
-                user_text = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print(f"\n{config.name}: Talk soon! I'll be right here.")
-            assistant.remember_session()
-            break
-
-        if not user_text:
-            continue
-
-        if _is_exit(user_text):
-            farewell = f"Take care, {config.user_name}! I'll be here whenever you need me."
-            print(f"{config.name}: {farewell}")
-            if tts:
-                tts.say(farewell)
-            # Reflect on the chat and store anything worth remembering.
-            assistant.remember_session()
-            break
-
-        reply = assistant.respond(user_text)
-        print(f"{config.name}: {reply}\n")
-        if tts:
-            tts.say(reply)
+    _chat_session(assistant, config, tts, stt)
