@@ -50,7 +50,27 @@ def _vbs_contents(args: str) -> str:
     )
 
 
-def install(args: str = "--wake --my-voice --service") -> bool:
+def launch_now() -> bool:
+    """Start the hidden background BEASTT immediately, without waiting for login."""
+    path = launcher_path()
+    if sys.platform != "win32" or not path.exists():
+        return False
+    try:
+        import subprocess
+
+        subprocess.Popen(
+            ["wscript", str(path)],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            close_fds=True,
+        )
+        return True
+    except Exception as exc:
+        print(f"[autostart] Couldn't launch it now ({exc}).")
+        print(f'            Start it manually with:  wscript "{path}"')
+        return False
+
+
+def install(args: str = "--wake --my-voice --service", start_now: bool = True) -> bool:
     """Create the startup launcher. Returns True on success."""
     if sys.platform != "win32":
         print("[autostart] Automatic setup currently supports Windows only.")
@@ -70,11 +90,18 @@ def install(args: str = "--wake --my-voice --service") -> bool:
         print(f"[autostart] Couldn't write the launcher ({exc}).")
         return False
 
-    print("[autostart] Installed! BEASTT will now start automatically when you log in.")
+    print("[autostart] Installed! BEASTT will start automatically when you log in.")
     print(f"            Launcher: {path}")
     print(f"            Command:  main.py {args}")
-    print("\n            Start it right now without rebooting:")
-    print(f'            wscript "{path}"')
+
+    if start_now and launch_now():
+        print("\n[autostart] Started it in the background now, too.")
+        print("            Give it ~20s to load, listen for the chime, then call BEASTT.")
+        print("            Check it with:  python main.py --status")
+    else:
+        print("\n            Start it without rebooting:")
+        print(f'            wscript "{path}"')
+
     print("\n            To remove it later:  python main.py --uninstall-startup")
     return True
 
