@@ -33,6 +33,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="Enable voice mode (BEASTT listens on the mic and speaks replies).",
     )
     p.add_argument(
+        "--text",
+        action="store_true",
+        help="Force text-only chat, even if voice is enabled in .env.",
+    )
+    p.add_argument(
         "--model", default=None, help="Override the Ollama model (e.g. qwen3, phi4)."
     )
     p.add_argument(
@@ -68,6 +73,10 @@ def _build_config(args: argparse.Namespace) -> Config:
     if args.my_voice:
         config.speaker_only = True
         config.voice_enabled = True
+    # --text always wins, so it can override BEASTT_VOICE=on in .env.
+    if args.text:
+        config.voice_enabled = False
+        config.speaker_only = False
     return config
 
 
