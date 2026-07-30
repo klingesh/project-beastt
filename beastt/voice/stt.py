@@ -97,8 +97,9 @@ class SpeechToText:
                 if not quiet:
                     print(f"[voice] match: {self._verifier.explain(audio)}")
                 if not ok:
-                    if not quiet:
-                        print("[voice] (ignored -- doesn't sound like you)")
+                    # Always report a rejection, even in quiet/standby mode:
+                    # silently dropping speech makes the assistant look dead.
+                    print(f"[voice] ignored -- not your voice ({self._verifier.explain(audio)})")
                     return ""
 
             result = self._model.transcribe(audio, fp16=False, language="en")

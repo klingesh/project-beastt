@@ -166,8 +166,11 @@ def _build_verifier(config: Config, announce: bool = True):
         if verifier.has_cohort:
             print("[voice] Voice lock ON (comparing against known other voices).")
         else:
-            print("[voice] Voice lock ON -- but accuracy is much better if you")
-            print("        also run: python main.py --enroll-other")
+            print(
+                f"[voice] Voice lock ON using a fixed threshold "
+                f"({verifier.threshold:.2f}) -- the less reliable mode."
+            )
+            print("        If it ignores you, run:  python main.py --enroll-other")
     return verifier
 
 
@@ -323,6 +326,9 @@ def _run_standby(config: Config, verbose: bool) -> None:
 
         woken, remainder = detect(heard, wake_words)
         if not woken:
+            # Log what was heard but not matched -- essential for diagnosing
+            # "it never responds" when there's no console to watch.
+            print(f"[wake] (heard, not my name: {heard!r})")
             continue
 
         print(f"[wake] Heard you: {heard!r}")

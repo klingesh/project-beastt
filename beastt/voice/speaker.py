@@ -97,6 +97,17 @@ class SpeakerVerifier:
 
     # --- persistence ------------------------------------------------------
     def _load(self) -> None:
+        # Voiceprints used to be a single-vector .npy; the current format is an
+        # .npz holding the owner bank plus the imposter cohort. If a config still
+        # points at the legacy .npy but an .npz exists alongside it, prefer the
+        # .npz -- otherwise the cohort silently disappears and verification
+        # falls back to the less reliable absolute threshold.
+        if self.voiceprint_path.endswith(".npy"):
+            modern = self.voiceprint_path[:-4] + ".npz"
+            if os.path.exists(modern):
+                print("[voice] Using newer voiceprint file (.npz).")
+                self.voiceprint_path = modern
+
         if not os.path.exists(self.voiceprint_path):
             return
         try:
