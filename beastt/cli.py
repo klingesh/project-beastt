@@ -12,7 +12,9 @@ Three ways to run:
 from __future__ import annotations
 
 import argparse
+import os
 import re
+from pathlib import Path
 
 from .assistant import Assistant
 from .config import Config
@@ -234,6 +236,16 @@ def _ask_mode(config: Config, tts, wake_stt) -> str:
             print(f"You: {spoken}")
             choice = parse_mode_choice(spoken)
             if choice:
+                # Always confirm out loud: in text mode BEASTT otherwise goes
+                # silent while waiting at the keyboard, which looks like a hang.
+                confirm = (
+                    "Okay, I'm listening."
+                    if choice == "voice"
+                    else "Sure -- opening a chat window for you now."
+                )
+                print(f"{config.name}: {confirm}")
+                if tts:
+                    tts.say(confirm)
                 return choice
             nudge = "Sorry, voice or text?"
             print(f"{config.name}: {nudge}")
@@ -245,6 +257,36 @@ def _ask_mode(config: Config, tts, wake_stt) -> str:
     except (EOFError, KeyboardInterrupt):
         return "voice"
     return parse_mode_choice(typed) or "voice"
+
+
+def _open_text_window(config: Config) -> bool:
+    """Open a visible console running a text chat.
+
+    In background/service mode there is no window to type into, so choosing
+    "text" would leave the user with nothing. Spawn a real console (using
+    python.exe, not pythonw.exe) and let standby keep listening.
+    """
+    import subprocess
+    import sys
+
+    from .paths import project_root
+
+    exe = Path(sys.executable)
+    console_py = exe.with_name("python.exe")
+    if not console_py.exists():
+        console_py = exe
+
+    cmd = [str(console_py), str(project_root() / "main.py"), "--text"]
+    try:
+        subprocess.Popen(
+            cmd,
+            cwd=str(project_root()),
+            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+        )
+        return True
+    except Exception as exc:
+        print(f"[wake] Couldn't open a chat window ({exc}).")
+        return False
 
 
 def _run_standby(config: Config, verbose: bool) -> None:
@@ -292,6 +334,21 @@ def _run_standby(config: Config, verbose: bool) -> None:
         if mode not in ("voice", "text"):
             mode = _ask_mode(config, tts, wake_stt)
         print(f"[wake] Starting {mode} chat.")
+
+        # Headless (background service): a text chat needs its own window.
+        if mode == "text" and os.environ.get("BEASTT_HEADLESS") == "1":
+            if _open_text_window(config):
+                print("[wake] Opened a separate console for the text chat.")
+            else:
+                spoken = "I couldn't open a window, so let's talk by voice instead."
+                print(f"{config.name}: {spoken}")
+                if tts:
+                    tts.say(spoken)
+                mode = "voice"
+            if mode == "text":
+                chime_sleep()
+                print(f"[wake] Back on standby. Call \"{config.name}\" anytime.\n")
+                continue
 
         # A fresh Assistant each time gives a clean conversation but keeps
         # long-term memory, which lives on disk.

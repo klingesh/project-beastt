@@ -97,6 +97,10 @@ def run_service(config: Config) -> None:
     except Exception:
         pass
 
+    # Tell the standby loop there's no console, so a text chat must open its own
+    # window rather than waiting on stdin that nobody can see.
+    os.environ["BEASTT_HEADLESS"] = "1"
+
     _setup_logging()
     _write_pid()
     print(f"\n===== BEASTT service started {_stamp()} (pid {os.getpid()}) =====")
