@@ -160,6 +160,7 @@ def run(argv=None) -> None:
                 user_text = input("You: ").strip()
         except (EOFError, KeyboardInterrupt):
             print(f"\n{config.name}: Talk soon! I'll be right here.")
+            assistant.remember_session()
             break
 
         if not user_text:
@@ -170,6 +171,8 @@ def run(argv=None) -> None:
             print(f"{config.name}: {farewell}")
             if tts:
                 tts.say(farewell)
+            # Reflect on the chat and store anything worth remembering.
+            assistant.remember_session()
             break
 
         reply = assistant.respond(user_text)

@@ -13,11 +13,14 @@ from typing import List, Optional
 from .brain import Brain, build_brain
 from .brain.base import Message
 from .config import Config
+from .longterm import LongTermMemory
 from .memory import Memory
 from .personality import system_prompt, welcome_message
+from .reflect import extract_facts
 from .search import WebSearch, extract_query, format_results, is_news, needs_search
 from .skills import default_skills
 from .skills.base import Skill
+from .skills.memory_skill import MemorySkill
 
 _SEARCH_INSTRUCTION = (
     "[You just searched the web for the user in real time. Use the results below "
@@ -46,6 +49,18 @@ class Assistant:
         )
         self.search = WebSearch() if self.config.search_enabled else None
         self._verbose = verbose
+
+        # Long-term memory: facts that persist across sessions.
+        self.longterm = (
+            LongTermMemory(self.config.memory_path)
+            if self.config.longterm_enabled
+            else None
+        )
+        if self.longterm is not None:
+            # Let the user manage memory directly ("remember that ...").
+            self.skills.insert(0, MemorySkill(self.longterm, self.config.user_name))
+            if verbose and len(self.longterm):
+                print(f"[memory] Recalling {len(self.longterm)} things about you.")
 
     # --- lifecycle --------------------------------------------------------
     def welcome(self) -> str:
@@ -79,6 +94,7 @@ class Assistant:
         #    search first if the question needs current information.
         self.memory.add_user(text)
         messages = self.memory.messages()
+        messages = self._augment_with_memories(text, messages)
         if self.search is not None and needs_search(text):
             messages = self._augment_with_search(text, messages)
 
@@ -113,6 +129,46 @@ class Assistant:
         context = format_results(results)
         note = Message(role="system", content=_SEARCH_INSTRUCTION + context)
         return [*messages, note]
+
+    def _augment_with_memories(self, text: str, messages):
+        """Prepend what BEASTT remembers about the user, when relevant."""
+        if self.longterm is None or not len(self.longterm):
+            return messages
+        facts = self.longterm.relevant(text, limit=self.config.memory_recall_limit)
+        if not facts:
+            return messages
+        listing = "\n".join(f"- {f}" for f in facts)
+        note = Message(
+            role="system",
+            content=(
+                f"[Things you remember about {self.config.user_name} from previous "
+                f"conversations. Use them naturally when relevant -- don't recite them "
+                f"or mention that you have notes.]\n{listing}"
+            ),
+        )
+        # Insert right after the persona so it reads as background knowledge.
+        return [messages[0], note, *messages[1:]]
+
+    def remember_session(self) -> int:
+        """Reflect on this conversation and save durable facts. Returns count added."""
+        if self.longterm is None:
+            return 0
+        transcript = [m for m in self.memory.messages() if m.role != "system"]
+        if len(transcript) < 2:
+            return 0
+        if self._verbose:
+            print("[memory] Thinking about what to remember...")
+        facts = extract_facts(self.brain, transcript, self.config.user_name)
+        added = 0
+        for fact in facts:
+            if self.longterm.add(fact):
+                added += 1
+        if self._verbose:
+            if added:
+                print(f"[memory] Remembered {added} new thing(s) about you.")
+            else:
+                print("[memory] Nothing new to remember this time.")
+        return added
 
     def reset(self) -> None:
         """Forget the current conversation (keeps the personality)."""

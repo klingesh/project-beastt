@@ -42,6 +42,11 @@ class Config:
     # Memory
     max_history_messages: int = int(_get("BEASTT_MAX_HISTORY", "20"))
 
+    # Long-term memory (persists across sessions)
+    longterm_enabled: bool = _get("BEASTT_MEMORY", "on").lower() in ("on", "true", "1", "yes")
+    memory_path: str = _get("BEASTT_MEMORY_PATH", "beastt_memory/memory.json")
+    memory_recall_limit: int = int(_get("BEASTT_MEMORY_RECALL", "8"))
+
     # Web search
     search_enabled: bool = _get("BEASTT_SEARCH", "on").lower() in ("on", "true", "1", "yes")
     search_max_results: int = int(_get("BEASTT_SEARCH_RESULTS", "5"))
