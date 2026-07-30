@@ -80,6 +80,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="Stop BEASTT from starting automatically.",
     )
     p.add_argument(
+        "--status",
+        action="store_true",
+        help="Diagnose the setup: is BEASTT running, enrolled, and configured?",
+    )
+    p.add_argument(
         "--enroll",
         action="store_true",
         help="Record your voiceprint so BEASTT can recognise only your voice.",
@@ -347,6 +352,13 @@ def run(argv=None) -> None:
     args = _parse_args(argv)
     config = _build_config(args)
     verbose = not args.quiet
+
+    # Diagnostics, then exit.
+    if args.status:
+        from .status import report
+
+        report()
+        return
 
     # Autostart management, then exit.
     if args.install_startup or args.uninstall_startup:
