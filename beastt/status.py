@@ -84,7 +84,21 @@ def report() -> None:
     config = Config.load()
     from . import autostart
 
-    print("\n=== BEASTT status ===\n")
+    print(f"\n=== {config.name} status ===\n")
+
+    # 0. Identity -- the most common source of "it won't wake" confusion is a
+    #    stale name in .env, which makes it answer to something else entirely.
+    print(f"[   ] Assistant name: {config.name}   (calls you: {config.user_name})")
+    try:
+        print(f"[   ] Wake words:     {', '.join(config.wake_words())}")
+    except Exception:
+        pass
+    env = resolve(".env")
+    if env.exists():
+        print(f"[   ] Settings from:  {env}   <- this overrides defaults")
+    else:
+        print("[   ] No .env file (using defaults)")
+    print()
 
     # 1. Autostart
     launcher = autostart.launcher_path()
