@@ -9,8 +9,9 @@ env/
 # Environment / secrets
 .env
 
-# BEASTT runtime data
+# Runtime data and generated files
 beastt_memory/
+beastt_output/
 *.log
 
 # OS / editor

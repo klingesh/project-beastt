@@ -13,6 +13,8 @@ JARVIS is a voice **and** text AI assistant that runs on a **free, local** langu
 - 🎯 **Noise-robust listening** — ignores coughs, sips, and background clatter; reacts to actual speech.
 - 🔐 **Voice lock** — recognizes your voiceprint and ignores other people.
 - 🧵 **Memory** — remembers the flow of your chat within a session.
+- 📄 **Makes documents** — real PowerPoint, Word, and Excel files from an idea.
+- 🐙 **GitHub** — pushes what it creates to your repos.
 - 🔌 **Pluggable skills** — instant answers for time/date, easy to extend.
 - 🪶 **Graceful fallback** — every optional feature degrades cleanly instead of crashing.
 
@@ -110,6 +112,54 @@ Locked out? Override it any time:
 python main.py --wake --no-voice-lock
 ```
 
+## 📄 Creating documents
+
+Ask in plain language and you get a real Office file:
+
+```
+"make a ppt about renewable energy"
+"create a word document on the history of cricket"
+"generate an excel sheet of monthly expenses"
+```
+
+```bash
+pip install -r requirements-docs.txt
+```
+
+Files land in `beastt_output/`. The local model writes the *content* as JSON and
+the renderer handles all layout, so a weak model can only produce a thin
+document -- never a corrupt one.
+
+| Ask for | You get |
+|---------|---------|
+| ppt, powerpoint, presentation, slides, deck | `.pptx` with title slide, bullets, speaker notes |
+| word, document, report, essay | `.docx` with headings, paragraphs, bullet lists |
+| excel, spreadsheet, workbook | `.xlsx` with bold headers, typed cells, sized columns |
+
+## 🐙 GitHub access
+
+The assistant can push what it creates straight to your repositories:
+
+```
+"push it to github"
+"upload it to my notes repo"
+"list my repos"
+"what files are in project-beastt"
+```
+
+Set it up with a [personal access token](https://github.com/settings/tokens)
+(scope: `repo`) in your `.env`:
+
+```
+BEASTT_GITHUB_TOKEN=ghp_yourtokenhere
+BEASTT_GITHUB_REPO=my-notes        # default push target
+BEASTT_GITHUB_FOLDER=jarvis        # folder inside the repo
+```
+
+Deliberately conservative: it only creates or updates single files inside the
+configured folder. It never deletes, rewrites history, or force-pushes. Keep
+`.env` out of version control -- it's already in `.gitignore`.
+
 ## ⚙️ Configuration
 
 Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
@@ -123,6 +173,8 @@ Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 | Speaking speed | `BEASTT_TTS_RATE` | `175` |
 | Whisper model | `BEASTT_STT_MODEL` | `base` (`small` is more accurate) |
 | Web search | `BEASTT_SEARCH` | `on` |
+| Documents | `BEASTT_DOCUMENTS` | `on` |
+| GitHub token | `BEASTT_GITHUB_TOKEN` | (unset) |
 | Voice lock (advanced) | `BEASTT_MY_VOICE_ONLY` | `off` |
 | Voice-lead margin | `BEASTT_SPEAKER_MARGIN` | `0.04` |
 

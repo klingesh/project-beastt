@@ -69,6 +69,14 @@ class Config:
     memory_path: str = _get("BEASTT_MEMORY_PATH", "beastt_memory/memory.json")
     memory_recall_limit: int = int(_get("BEASTT_MEMORY_RECALL", "8"))
 
+    # Documents (PowerPoint / Word / Excel generation)
+    documents_enabled: bool = _get("BEASTT_DOCUMENTS", "on").lower() in ("on", "true", "1", "yes")
+
+    # GitHub access (push generated files, browse repos)
+    github_token: str = _get("BEASTT_GITHUB_TOKEN", "")
+    github_repo: str = _get("BEASTT_GITHUB_REPO", "")        # default push target
+    github_folder: str = _get("BEASTT_GITHUB_FOLDER", "jarvis")
+
     # Web search
     search_enabled: bool = _get("BEASTT_SEARCH", "on").lower() in ("on", "true", "1", "yes")
     search_max_results: int = int(_get("BEASTT_SEARCH_RESULTS", "5"))

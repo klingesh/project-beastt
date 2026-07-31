@@ -1,0 +1,7 @@
+# Document generation for the assistant (PowerPoint / Word / Excel).
+# Install with:  pip install -r requirements-docs.txt
+#
+# GitHub access needs nothing extra -- it uses `requests` from requirements.txt.
+python-pptx>=0.6.21
+python-docx>=1.1.0
+openpyxl>=3.1.0

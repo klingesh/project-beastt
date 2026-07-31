@@ -62,6 +62,23 @@ class Assistant:
             if verbose and len(self.longterm):
                 print(f"[memory] Recalling {len(self.longterm)} things about you.")
 
+        # Document creation, and GitHub for getting those files off the machine.
+        self.last_document = None
+        if self.config.documents_enabled:
+            from .skills.document_skill import DocumentSkill
+            from .skills.github_skill import GitHubSkill
+
+            self.skills.insert(
+                0,
+                DocumentSkill(
+                    brain_provider=lambda: self.brain,
+                    on_created=self._remember_document,
+                ),
+            )
+            self.skills.insert(
+                0, GitHubSkill(self.config, last_file_provider=lambda: self.last_document)
+            )
+
     # --- lifecycle --------------------------------------------------------
     def welcome(self) -> str:
         """The greeting BEASTT says when it wakes up."""
@@ -169,6 +186,10 @@ class Assistant:
             else:
                 print("[memory] Nothing new to remember this time.")
         return added
+
+    def _remember_document(self, path) -> None:
+        """Track the newest generated file so "push it to GitHub" knows the target."""
+        self.last_document = path
 
     def reset(self) -> None:
         """Forget the current conversation (keeps the personality)."""
