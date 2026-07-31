@@ -20,6 +20,7 @@ from .reflect import extract_facts
 from .search import WebSearch, extract_query, format_results, is_news, needs_search
 from .skills import default_skills
 from .skills.base import Skill
+from .skills.maintenance_skill import MaintenanceSkill
 from .skills.memory_skill import MemorySkill
 
 _SEARCH_INSTRUCTION = (
@@ -81,6 +82,17 @@ class Assistant:
                 0, GitHubSkill(self.config, last_file_provider=lambda: self.last_document)
             )
 
+        # Looking after itself: diagnose, repair, and update.
+        self.skills.insert(0, MaintenanceSkill(self.config))
+
+        # Reading documents out of repositories (or locally).
+        if self.config.documents_enabled:
+            from .skills.read_skill import ReadSkill
+
+            self.skills.insert(
+                0, ReadSkill(self.config, brain_provider=lambda: self.brain)
+            )
+
         # Coding: write files, scaffold projects, run commands, manage clones.
         if self.config.code_enabled:
             from .skills.code_skill import CodeSkill
@@ -112,7 +124,12 @@ class Assistant:
             try:
                 if skill.matches(text):
                     return skill.run(text)
-            except Exception:
+            except Exception as exc:
+                # Log and fall through: one broken skill shouldn't end the turn.
+                from .selfheal import record
+
+                record(exc, context=f"the {skill.name} skill")
+                print(f"[skill] {skill.name} failed: {exc.__class__.__name__}: {exc}")
                 continue
         return None
 
@@ -140,9 +157,13 @@ class Assistant:
         try:
             reply = self.brain.reply(messages)
         except Exception as exc:
+            from .selfheal import record
+
+            record(exc, context="thinking about a reply")
             reply = (
                 "Hmm, I hit a snag trying to think that through "
-                f"({exc.__class__.__name__}). Mind trying again?"
+                f"({exc.__class__.__name__}). Say \"fix yourself\" and I'll "
+                "check what's wrong."
             )
         if not reply:
             reply = "I'm not quite sure how to answer that -- can you say a bit more?"

@@ -15,6 +15,8 @@ JARVIS is a voice **and** text AI assistant that runs on a **free, local** langu
 - 🧵 **Memory** — remembers the flow of your chat within a session.
 - 📄 **Makes documents** — real PowerPoint, Word, and Excel files from an idea.
 - 🐙 **GitHub** — pushes what it creates to your repos, and clones them back.
+- 🩺 **Looks after itself** — diagnoses problems, repairs what it can, and updates its own code.
+- 📖 **Reads documents** — PDF, Word, Excel, PowerPoint from your repos.
 - 💻 **Writes code** — scripts, web pages, and whole project scaffolds.
 - 🖥️ **Runs commands** — opt-in, with destructive operations refused outright.
 - 🔌 **Pluggable skills** — instant answers for time/date, easy to extend.
@@ -327,6 +329,61 @@ unless you want it.
 Repositories land in `beastt_workspace/`. Private repos use your token for the
 clone only -- the remote is rewritten afterwards so no credential is left in
 `.git/config`, and the token is never echoed in output.
+
+## 🩺 Looking after itself
+
+```
+"check yourself"          -> health check of everything
+"fix yourself"            -> repair what it can, report what it can't
+"what went wrong"         -> recent errors, in plain language
+"are you up to date"      -> check GitHub for newer code
+"update yourself"         -> fetch and apply it
+"update your model"       -> pull the latest build of the local model
+"roll back the last update"
+```
+
+Repairs are **deterministic**, not the model editing its own source:
+
+| Problem | Fix |
+|---------|-----|
+| Missing Python package | Installs it |
+| Ollama not running | Starts it |
+| Model not pulled | Pulls it |
+| Missing data folders | Creates them |
+| Corrupt memory file | Backs it up and starts fresh |
+| Anything needing a code change | **Reports it** -- with the traceback |
+
+> The assistant deliberately cannot rewrite its own code. A model editing the
+> source it is running from can break itself irrecoverably, so real code fixes are
+> diagnosed and handed to you.
+
+Failures are logged to `beastt_memory/errors.log`, so "what went wrong" has
+something concrete to answer with. Updates keep a backup of every replaced file
+(`beastt_memory/backups/`) and never touch `.env`, memory, or generated files --
+and take effect on restart.
+
+## 📖 Reading documents
+
+```
+"what documents are in project-beastt"
+"read the renewable energy ppt in project-beastt"
+"summarise report.pdf from my notes repo"
+"read beastt_output/plan.docx"          (a local file)
+```
+
+Files are found by fuzzy name match, fetched from the repository, converted to
+text, and summarised by the local model.
+
+| Format | Read as |
+|--------|---------|
+| PDF | Page text (scans need OCR, which isn't supported) |
+| Word `.docx` | Paragraphs and tables |
+| PowerPoint `.pptx` | Slide-by-slide text |
+| Excel `.xlsx` | Sheets as rows |
+| CSV, JSON, TXT, MD, and source files | Directly |
+
+Long documents are truncated before reaching the model, since a 200-page PDF
+would otherwise exceed its context window.
 
 ## ⚙️ Configuration
 
