@@ -71,6 +71,22 @@ Rules:
 """
 
 
+def ask_json(brain: Brain, prompt: str) -> str:
+    """Ask the brain for JSON, using constrained decoding when supported.
+
+    Ollama's `format: json` mode makes structured replies dramatically more
+    reliable than prompting alone, and a larger context stops long documents
+    being truncated. Backends that don't support these options ignore them.
+    """
+    try:
+        return brain.reply(
+            [Message(role="user", content=prompt)], json_mode=True, temperature=0.3
+        )
+    except TypeError:
+        # Backend doesn't accept the extra options.
+        return brain.reply([Message(role="user", content=prompt)])
+
+
 def _extract_json(raw: str) -> Optional[Dict]:
     """Pull the JSON object out of a model reply, tolerating stray prose/fences."""
     if not raw:
@@ -199,8 +215,9 @@ def revise(
     )
     for _ in range(attempts):
         try:
-            raw = brain.reply([Message(role="user", content=prompt)])
-        except Exception:
+            raw = ask_json(brain, prompt)
+        except Exception as exc:
+            print(f"[docs] Revision request failed: {exc}")
             return None
         data = _extract_json(raw)
         if data:
@@ -210,8 +227,68 @@ def revise(
                 if spec.get("design") and not updated.get("design"):
                     updated["design"] = spec["design"]
                 return updated
+            print("[docs] Model returned too little content; keeping previous version.")
+        else:
+            print("[docs] Model reply wasn't valid JSON; retrying.")
         prompt += "\n\nYour previous reply was not valid JSON. Return ONLY the complete JSON."
     return None
+
+
+# --- targeted edits ---------------------------------------------------------
+_ONE_SLIDE = """Write ONE new presentation slide about: {topic}
+
+It belongs in a deck titled "{deck}". Return ONLY this JSON:
+{{"title": "slide title", "bullets": ["short bullet", "short bullet", "short bullet"],
+  "key_message": "the single takeaway", "notes": "speaker notes"}}
+
+Keep bullets under ~12 words, specific and factual. Plain text only.
+"""
+
+_ONE_SECTION = """Write ONE new section about: {topic}
+
+It belongs in a document titled "{deck}". Return ONLY this JSON:
+{{"heading": "section heading", "paragraphs": ["a full paragraph", "another paragraph"],
+  "bullets": []}}
+
+Substantive prose, 2-4 sentences per paragraph. Plain text only.
+"""
+
+
+def new_item(brain: Brain, kind: str, topic: str, deck_title: str) -> Optional[Dict]:
+    """Generate a single slide or section.
+
+    Asking for one small object is far more reliable on a local model than
+    requesting a rewrite of the whole document, which tends to get truncated.
+    """
+    template = _ONE_SLIDE if kind == "presentation" else _ONE_SECTION
+    prompt = template.format(topic=topic, deck=deck_title)
+    try:
+        raw = ask_json(brain, prompt)
+    except Exception:
+        return None
+    data = _extract_json(raw)
+    if not data:
+        return None
+
+    if kind == "presentation":
+        bullets = [_clean(b) for b in (data.get("bullets") or []) if _clean(b)]
+        if not data.get("title") or not bullets:
+            return None
+        return {
+            "title": _clean(data["title"])[:120],
+            "bullets": bullets[:8],
+            "key_message": _clean(data.get("key_message") or "")[:180] or None,
+            "notes": _clean(data.get("notes") or "")[:600] or None,
+        }
+
+    paragraphs = [_clean(p) for p in (data.get("paragraphs") or []) if _clean(p)]
+    if not data.get("heading") or not paragraphs:
+        return None
+    return {
+        "heading": _clean(data["heading"])[:120],
+        "paragraphs": paragraphs,
+        "bullets": [_clean(b) for b in (data.get("bullets") or []) if _clean(b)],
+    }
 
 
 def plan(brain: Brain, kind: str, topic: str, attempts: int = 2) -> Optional[Dict]:
@@ -221,7 +298,7 @@ def plan(brain: Brain, kind: str, topic: str, attempts: int = 2) -> Optional[Dic
     )
     for attempt in range(attempts):
         try:
-            raw = brain.reply([Message(role="user", content=prompt)])
+            raw = ask_json(brain, prompt)
         except Exception:
             return None
         data = _extract_json(raw)

@@ -178,6 +178,98 @@ class Workshop:
                 )
         return None
 
+    # --- deterministic structural edits -----------------------------------
+    _ADD = re.compile(
+        r"\b(?:add|include|insert|append)\b(?:\s+(?:a|an|another|one))?\s*"
+        r"(?:new\s+)?(?:slide|section|page|part|chapter)?\s*"
+        r"(?:about|on|for|covering|regarding|titled|called)?\s+(.+)$",
+        re.IGNORECASE,
+    )
+    _REMOVE = re.compile(
+        r"\b(?:remove|delete|drop|cut|get rid of|take out)\b\s*"
+        r"(?:the\s+)?(.+?)\s*(?:slide|section|page|part)?\s*$",
+        re.IGNORECASE,
+    )
+    _SHORTEN = re.compile(
+        r"\b(shorten|shorter|trim|tighten|condense|more concise|less wordy|"
+        r"cut down)\b", re.IGNORECASE
+    )
+    _RETITLE = re.compile(
+        r"\b(?:rename|retitle|change)\b[^.]*?\btitle\b[^\w]*(?:to|as|into)?\s*[\"']?(.+?)[\"']?\s*$",
+        re.IGNORECASE,
+    )
+
+    def _items(self):
+        """The editable list for this document kind, and its label."""
+        if self.kind == "presentation":
+            return self.spec.setdefault("slides", []), "slides", "title"
+        if self.kind == "document":
+            return self.spec.setdefault("sections", []), "sections", "heading"
+        return None, "", ""
+
+    def _structural_edit(self, brain: Brain, text: str) -> Optional[str]:
+        """Handle add / remove / shorten / retitle without a full rewrite."""
+        from .docgen import new_item
+
+        items, label, key = self._items()
+
+        # Retitle the whole document.
+        match = self._RETITLE.search(text)
+        if match:
+            new_title = match.group(1).strip(" .\"'")
+            if new_title:
+                self.spec["title"] = new_title[:120]
+                return f"title changed to {new_title!r}"
+
+        if items is None:  # spreadsheets fall through to the model
+            return None
+
+        # Add one slide/section -- generated as a single small object.
+        match = self._ADD.search(text)
+        if match:
+            topic = match.group(1).strip(" .?!")
+            topic = re.sub(r"^(?:a|an|the)\s+", "", topic, flags=re.IGNORECASE)
+            if topic:
+                item = new_item(brain, self.kind, topic, self.spec.get("title", self.topic))
+                if item:
+                    items.append(item)
+                    name = item.get(key, topic)
+                    return f"added {name!r}"
+                return None
+
+        # Remove by fuzzy title match.
+        match = self._REMOVE.search(text)
+        if match:
+            target = match.group(1).strip(" .?!").lower()
+            target = re.sub(r"^(?:the|a|an)\s+", "", target)
+            if target:
+                for index, item in enumerate(items):
+                    name = str(item.get(key, "")).lower()
+                    if target in name or name in target or (
+                        target.split() and target.split()[0] in name
+                    ):
+                        removed = items.pop(index)
+                        return f"removed {removed.get(key, '')!r}"
+                return None
+
+        # Shorten bullets across the document.
+        if self._SHORTEN.search(text):
+            trimmed = 0
+            for item in items:
+                bullets = item.get("bullets") or []
+                for i, bullet in enumerate(bullets):
+                    words = str(bullet).split()
+                    if len(words) > 8:
+                        bullets[i] = " ".join(words[:8])
+                        trimmed += 1
+                if len(bullets) > 5:
+                    item["bullets"] = bullets[:5]
+                    trimmed += 1
+            if trimmed:
+                return "bullets tightened"
+
+        return None
+
     # --- applying a revision ----------------------------------------------
     def revise(self, brain: Brain, text: str) -> str:
         """Apply an instruction to the current document and re-render it."""
@@ -213,18 +305,24 @@ class Workshop:
                 )
             )
 
-        # 2. Content edits go to the model, with the current spec as context.
+        # 2. Content edits: try the cheap, reliable structural handlers first,
+        #    and only fall back to a full model rewrite if none of them fit.
         if content_change:
-            updated = revise_spec(brain, self.kind, self.spec, text, self.topic)
-            if updated:
-                self.spec = updated
-                notes.append("content updated")
-            elif new_theme is None:
-                return (
-                    "I couldn't work out how to apply that change. Could you say it "
-                    "another way? For example: \"add a slide about costs\" or "
-                    "\"make the bullets shorter\"."
-                )
+            handled = self._structural_edit(brain, text)
+            if handled:
+                notes.append(handled)
+            else:
+                updated = revise_spec(brain, self.kind, self.spec, text, self.topic)
+                if updated:
+                    self.spec = updated
+                    notes.append("content updated")
+                elif new_theme is None:
+                    return (
+                        "I couldn't apply that one. Try being a bit more direct -- "
+                        "for example \"add a slide about costs\", \"remove the "
+                        "challenges slide\", \"shorten the bullets\", or "
+                        "\"rename the title to X\"."
+                    )
 
         # 3. Re-render.
         try:

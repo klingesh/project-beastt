@@ -39,12 +39,33 @@ class OllamaBrain(Brain):
             return False
 
     # --- inference --------------------------------------------------------
-    def reply(self, messages: List[Message]) -> str:
+    def reply(
+        self,
+        messages: List[Message],
+        json_mode: bool = False,
+        num_ctx: int = 8192,
+        temperature: float = None,
+    ) -> str:
+        """Generate a reply.
+
+        `json_mode` uses Ollama's constrained JSON decoding, which makes
+        structured output far more reliable than asking politely in the prompt.
+        `num_ctx` is raised well above Ollama's small default so long documents
+        aren't silently truncated mid-reply.
+        """
+        options = {"num_ctx": num_ctx}
+        if temperature is not None:
+            options["temperature"] = temperature
+
         payload = {
             "model": self.model,
             "messages": self.to_dicts(messages),
             "stream": False,
+            "options": options,
         }
+        if json_mode:
+            payload["format"] = "json"
+
         resp = requests.post(
             f"{self.base_url}/api/chat", json=payload, timeout=self.timeout
         )

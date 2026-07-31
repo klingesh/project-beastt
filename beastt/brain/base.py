@@ -26,8 +26,12 @@ class Brain(ABC):
         """Return True if this backend is ready to answer (model reachable, etc.)."""
 
     @abstractmethod
-    def reply(self, messages: List[Message]) -> str:
-        """Return a complete reply for the given conversation."""
+    def reply(self, messages: List[Message], **kwargs) -> str:
+        """Return a complete reply for the given conversation.
+
+        Backends may accept extra keyword arguments (e.g. `json_mode`) and must
+        ignore any they don't support, so callers can always pass them.
+        """
 
     def stream(self, messages: List[Message]) -> Iterator[str]:
         """Yield the reply in chunks. Default: yield the whole thing at once."""

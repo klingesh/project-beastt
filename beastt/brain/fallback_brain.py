@@ -21,7 +21,7 @@ class FallbackBrain(Brain):
     def is_available(self) -> bool:
         return True  # always works
 
-    def reply(self, messages: List[Message]) -> str:
+    def reply(self, messages: List[Message], **kwargs) -> str:
         user_text = ""
         for m in reversed(messages):
             if m.role == "user":
