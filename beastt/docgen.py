@@ -8,6 +8,7 @@ repaired here, so we never hand junk to the renderers.
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Dict, Optional
 
@@ -15,24 +16,19 @@ from .brain.base import Brain, Message
 
 _SCHEMAS = {
     "presentation": """{
-  "design": {"palette": "navy|slate|plum|ember|custom", "primary": "0B2545", "accent": "3DA5D9", "rationale": "why this suits the topic"},
+  "design": {"palette": "navy|slate|plum|ember", "rationale": "why this suits the topic"},
   "title": "short deck title",
   "subtitle": "one-line value proposition",
-  "cover_query": "two or three words describing a photo for the cover",
+  "cover_query": "two or three words describing a cover photo",
   "slides": [
-    {"layout": "bullets|image|comparison|stat|quote|timeline|section",
+    {"layout": "bullets",
      "title": "slide title",
-     "bullets": ["short bullet", "short bullet"],
-     "key_message": "the single takeaway from this slide",
+     "bullets": ["short bullet", "short bullet", "short bullet"],
+     "key_message": "the single takeaway",
      "notes": "speaker notes",
-     "image_query": "subject of a supporting photo (only for layout image)",
-     "left": {"heading": "Option A", "points": ["point"]},
-     "right": {"heading": "Option B", "points": ["point"]},
-     "stat": "68%", "stat_label": "what the number means",
-     "quote": "a quotation", "attribution": "who said it",
-     "timeline": [{"label": "2020", "text": "what happened"}]}
+     "image_query": "photo subject, only for layout image"}
   ],
-  "closing": "closing line, e.g. Thank you"
+  "closing": "Thank you"
 }""",
     "document": """{
   "design": {"palette": "navy|slate|plum|ember|custom", "primary": "0B2545", "accent": "3DA5D9", "font": "Times New Roman|SF Pro Text", "rationale": "why this suits the topic"},
@@ -75,12 +71,13 @@ Rules:
 - {guidance}
 - Be specific and useful -- real facts and concrete detail, not placeholders.
 - Keep all strings plain text: no markdown, asterisks, or newline characters.
-- Vary the slide layouts to suit the content: "bullets" for general points,
-  "image" when a photograph helps, "comparison" for two options or before/after,
-  "stat" for a single headline number, "quote" for a striking statement,
-  "timeline" for a sequence of dates or steps, "section" as a divider. Include
-  only the fields that layout needs, and roughly half the slides should be
-  "bullets". Give an "image_query" for every "image" slide.
+- Set "layout" on each slide. Use "bullets" for most slides, and "image" (with an
+  "image_query") for two or three where a photograph helps. Other options:
+  "stat" -- also give "stat" and "stat_label";
+  "comparison" -- also give "left" and "right", each with a heading and points;
+  "quote" -- also give "quote" and "attribution";
+  "timeline" -- also give "timeline", a list of items with label and text;
+  "section" -- a divider slide.
 - Choose a "design" that fits the subject: pick one of the named palettes, or set
   "palette": "custom" with your own dark "primary" and bright "accent" hex colours
   (no '#'). Corporate/finance suits navy or slate; nature and health suit greens;
@@ -89,45 +86,82 @@ Rules:
 """
 
 
-def ask_json(brain: Brain, prompt: str) -> str:
+DEBUG = os.environ.get("BEASTT_DEBUG", "").lower() in ("1", "on", "true", "yes")
+
+
+def ask_json(brain: Brain, prompt: str, json_mode: bool = True) -> str:
     """Ask the brain for JSON, using constrained decoding when supported.
 
-    Ollama's `format: json` mode makes structured replies dramatically more
-    reliable than prompting alone, and a larger context stops long documents
-    being truncated. Backends that don't support these options ignore them.
+    Ollama's `format: json` mode makes structured replies much more reliable than
+    prompting alone. Backends that don't accept the extra options ignore them.
     """
     try:
         return brain.reply(
-            [Message(role="user", content=prompt)], json_mode=True, temperature=0.3
+            [Message(role="user", content=prompt)],
+            json_mode=json_mode,
+            temperature=0.3,
         )
     except TypeError:
         # Backend doesn't accept the extra options.
         return brain.reply([Message(role="user", content=prompt)])
 
 
+def _unwrap(data):
+    """Unwrap the shapes models produce when they don't follow the schema exactly.
+
+    Common cases: the whole document nested under a key like "presentation", or
+    a bare list of slides returned with no wrapper.
+    """
+    if isinstance(data, list):
+        return {"slides": data, "sections": data}
+    if not isinstance(data, dict):
+        return None
+    # Already the right shape?
+    if any(k in data for k in ("slides", "sections", "sheets")):
+        return data
+    # Single wrapper key containing the real object.
+    for key in ("presentation", "document", "spreadsheet", "deck", "content",
+                "result", "output", "data"):
+        inner = data.get(key)
+        if isinstance(inner, dict) and any(
+            k in inner for k in ("slides", "sections", "sheets")
+        ):
+            return inner
+        if isinstance(inner, list) and inner:
+            return {**data, "slides": inner, "sections": inner}
+    return data
+
+
 def _extract_json(raw: str) -> Optional[Dict]:
-    """Pull the JSON object out of a model reply, tolerating stray prose/fences."""
+    """Pull the JSON out of a model reply, tolerating fences, prose, and wrappers."""
     if not raw:
         return None
-    text = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE)
+    text = re.sub(r"```(?:json)?", "", raw.strip())
 
-    # Find the outermost balanced object.
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    for idx in range(start, len(text)):
-        if text[idx] == "{":
-            depth += 1
-        elif text[idx] == "}":
-            depth -= 1
-            if depth == 0:
-                candidate = text[start : idx + 1]
-                try:
-                    data = json.loads(candidate)
-                    return data if isinstance(data, dict) else None
-                except json.JSONDecodeError:
-                    break
+    # Try the whole thing first (json_mode replies are usually clean).
+    for candidate in (text,):
+        try:
+            return _unwrap(json.loads(candidate))
+        except json.JSONDecodeError:
+            pass
+
+    # Otherwise find the outermost balanced object or array.
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start = text.find(opener)
+        if start == -1:
+            continue
+        depth = 0
+        for idx in range(start, len(text)):
+            char = text[idx]
+            if char == opener:
+                depth += 1
+            elif char == closer:
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return _unwrap(json.loads(text[start : idx + 1]))
+                    except json.JSONDecodeError:
+                        break
     return None
 
 
@@ -337,15 +371,41 @@ def plan(brain: Brain, kind: str, topic: str, attempts: int = 2) -> Optional[Dic
     prompt = _PROMPT.format(
         kind=kind, topic=topic, schema=_SCHEMAS[kind], guidance=_GUIDANCE[kind]
     )
-    for attempt in range(attempts):
+    # First try constrained JSON decoding; if that fails, fall back to plain
+    # prompting, since some models produce better content unconstrained.
+    for attempt in range(max(attempts, 2)):
+        json_mode = attempt == 0
         try:
-            raw = ask_json(brain, prompt)
-        except Exception:
+            raw = ask_json(brain, prompt, json_mode=json_mode)
+        except Exception as exc:
+            print(f"[docs] The model call failed: {exc.__class__.__name__}: {exc}")
+            if "timeout" in str(exc).lower() or "Timeout" in exc.__class__.__name__:
+                print("[docs] It ran out of time. A smaller model (llama3.2) is much "
+                      "quicker, or raise BEASTT_TIMEOUT in .env.")
             return None
+
+        if DEBUG:
+            print(f"[docs] raw reply ({len(raw)} chars): {raw[:400]}")
+
         data = _extract_json(raw)
-        if data:
+        if data is None:
+            print(f"[docs] Attempt {attempt + 1}: reply wasn't valid JSON "
+                  f"(got {len(raw)} chars). Retrying.")
+        else:
             spec = _normalise(kind, data, topic)
             if not _is_thin(kind, spec):
                 return spec
-        prompt += "\n\nYour previous reply was not valid JSON in the required shape. Return ONLY the JSON."
+            got = (
+                len(spec.get("slides") or []) if kind == "presentation"
+                else len(spec.get("sections") or []) if kind == "document"
+                else len(spec.get("sheets") or [])
+            )
+            print(f"[docs] Attempt {attempt + 1}: only {got} item(s) came back; "
+                  f"keys were {list(data)[:6]}. Retrying.")
+
+        prompt += (
+            "\n\nYour previous reply could not be used. Return ONLY a JSON object "
+            "with the exact keys shown above, and make sure the list has several "
+            "entries."
+        )
     return None

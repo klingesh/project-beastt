@@ -13,7 +13,11 @@ from .ollama_brain import OllamaBrain
 
 
 def build_brain(config: Config, verbose: bool = True) -> Brain:
-    ollama = OllamaBrain(model=config.model, base_url=config.ollama_url)
+    ollama = OllamaBrain(
+        model=config.model,
+        base_url=config.ollama_url,
+        timeout=getattr(config, "request_timeout", 300),
+    )
 
     if ollama.is_available():
         if verbose:

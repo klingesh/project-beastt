@@ -41,6 +41,8 @@ class Config:
     # Brain (Ollama)
     model: str = _get("BEASTT_MODEL", "llama3.2")
     ollama_url: str = _get("BEASTT_OLLAMA_URL", "http://localhost:11434")
+    # Generous, because generating a whole document on a laptop GPU is slow.
+    request_timeout: int = int(_get("BEASTT_TIMEOUT", "300"))
 
     # Voice
     voice_enabled: bool = _get("BEASTT_VOICE", "off").lower() in ("on", "true", "1", "yes")
