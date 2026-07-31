@@ -42,6 +42,10 @@ VERSION_FILE = "version.json"
 
 
 def _get(url: str, as_json: bool = False):
+    # Bypass the raw.githubusercontent CDN cache, which otherwise serves a stale
+    # copy for a few minutes after a push.
+    separator = "&" if "?" in url else "?"
+    url = f"{url}{separator}_={int(time.time() * 1000)}"
     request = urllib.request.Request(url, headers=_UA)
     with urllib.request.urlopen(request, timeout=60) as response:
         payload = response.read()

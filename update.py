@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,8 +38,19 @@ ROOT = Path(__file__).resolve().parent
 
 
 def _get(url: str, as_json: bool = False):
+    # raw.githubusercontent.com sits behind a CDN that caches for minutes, so a
+    # plain request can return a stale file moments after a push. A unique query
+    # string makes it a distinct resource, and the no-cache headers cover proxies.
+    separator = "&" if "?" in url else "?"
+    url = f"{url}{separator}_={int(time.time() * 1000)}"
     req = urllib.request.Request(
-        url, headers={"User-Agent": "beastt-updater", "Accept": "*/*"}
+        url,
+        headers={
+            "User-Agent": "beastt-updater",
+            "Accept": "*/*",
+            "Cache-Control": "no-cache, no-store",
+            "Pragma": "no-cache",
+        },
     )
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = resp.read()
