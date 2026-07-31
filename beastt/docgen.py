@@ -212,6 +212,13 @@ def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
                         cleaned.append({"label": "", "text": _clean(step)[:120]})
                 slide["timeline"] = cleaned
             slides.append(slide)
+        # Drop stray slides with no title and no content.
+        slides = [
+            s for s in slides
+            if s["title"] or s["bullets"] or s.get("stat") or s.get("quote")
+            or s.get("timeline") or s.get("left") or s.get("right")
+        ]
+        _ensure_visuals(slides)
         out["slides"] = slides
         if spec.get("cover_query"):
             out["cover_query"] = _clean(spec["cover_query"])[:80]
@@ -248,6 +255,31 @@ def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
                            "columns": columns, "rows": rows})
         out["sheets"] = sheets
     return out
+
+
+def _ensure_visuals(slides: list, wanted: int = 2) -> None:
+    """Promote a couple of bullet slides to the image layout.
+
+    Models often ignore the instruction to vary layouts and return an all-bullets
+    deck, which looks flat. Converting a few slides that have a usable title
+    guarantees some photography without changing any content.
+    """
+    if len(slides) < 4:
+        return
+    if any(str(s.get("layout") or "").lower() == "image" for s in slides):
+        return
+
+    # Prefer middle slides with a title and few bullets -- they have room for art.
+    candidates = [
+        (index, slide)
+        for index, slide in enumerate(slides)
+        if str(slide.get("layout") or "bullets").lower() == "bullets"
+        and slide.get("title")
+        and len(slide.get("bullets") or []) <= 4
+    ]
+    for index, slide in candidates[1 : 1 + wanted]:
+        slide["layout"] = "image"
+        slide.setdefault("image_query", slide["title"])
 
 
 def _is_thin(kind: str, spec: Dict) -> bool:

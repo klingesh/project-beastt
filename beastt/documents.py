@@ -36,6 +36,21 @@ class MissingLibrary(RuntimeError):
     pass
 
 
+def _is_empty_slide(item: Dict) -> bool:
+    """True when a slide has nothing to show, whatever its layout."""
+    if not isinstance(item, dict):
+        return True
+    if str(item.get("title") or "").strip():
+        return False
+    for field in ("bullets", "timeline", "steps"):
+        if item.get(field):
+            return False
+    for field in ("stat", "quote", "key_message"):
+        if str(item.get(field) or "").strip():
+            return False
+    return not (item.get("left") or item.get("right"))
+
+
 def _resolve_theme(spec: Dict, theme_name):
     """Pick the theme: a Theme instance, the model's design spec, or a palette name."""
     from .theme import Theme, from_design, get
@@ -156,17 +171,28 @@ def build_presentation(spec: Dict, theme_name: str = "navy", finder=None) -> Pat
     # ---- Content slides, each drawn by its chosen layout ------------------
     from .layouts import SlideBuilder, normalise, render
 
+    # Drop anything with neither a title nor content: a model occasionally emits
+    # a stray slide, which would otherwise render as a blank page.
+    slides = [s for s in slides if not _is_empty_slide(s)]
+
     builder = SlideBuilder(prs, th, title)
-    total = len(slides)
-    for number, item in enumerate(slides, 1):
+    # Dividers carry no footer, so number only the slides that show one --
+    # otherwise the visible sequence skips numbers.
+    numbered_total = sum(
+        1 for s in slides if normalise(s.get("layout") or "bullets") != "section"
+    )
+    position = 0
+    for item in slides:
         layout = normalise(item.get("layout") or "bullets")
+        if layout != "section":
+            position += 1
         picture = None
         if layout == "image" and finder is not None:
             picture = finder.find(
                 item.get("image_query") or item.get("title") or title,
                 orientation="square",
             )
-        render(layout, builder, item, number, total, picture)
+        render(layout, builder, item, position, numbered_total, picture)
 
     # ---- Image credits, as the licences require ---------------------------
     if finder is not None and finder.credits:
