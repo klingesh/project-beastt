@@ -190,6 +190,8 @@ def _chat_session(assistant: Assistant, config: Config, tts, stt) -> None:
     `stt` is None for a typed session. Returns when the chat ends; the caller
     decides whether to exit or go back to standby.
     """
+    assistant.voice_mode = stt is not None and getattr(stt, "available", False)
+
     greeting = assistant.welcome()
     print(f"\n{config.name}: {greeting}\n")
     if tts:

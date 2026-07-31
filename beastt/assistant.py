@@ -64,6 +64,8 @@ class Assistant:
 
         # Document creation, and GitHub for getting those files off the machine.
         self.last_document = None
+        # Set by the CLI when input is coming from the microphone.
+        self.voice_mode = False
         if self.config.documents_enabled:
             from .skills.document_skill import DocumentSkill
             from .skills.github_skill import GitHubSkill
@@ -77,6 +79,26 @@ class Assistant:
             )
             self.skills.insert(
                 0, GitHubSkill(self.config, last_file_provider=lambda: self.last_document)
+            )
+
+        # Coding: write files, scaffold projects, run commands, manage clones.
+        if self.config.code_enabled:
+            from .skills.code_skill import CodeSkill
+            from .skills.shell_skill import ShellSkill
+
+            self.skills.insert(
+                0,
+                CodeSkill(
+                    brain_provider=lambda: self.brain,
+                    on_created=self._remember_document,
+                ),
+            )
+            self.skills.insert(
+                0,
+                ShellSkill(
+                    self.config,
+                    voice_mode_provider=lambda: self.voice_mode,
+                ),
             )
 
     # --- lifecycle --------------------------------------------------------

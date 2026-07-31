@@ -14,7 +14,9 @@ JARVIS is a voice **and** text AI assistant that runs on a **free, local** langu
 - 🔐 **Voice lock** — recognizes your voiceprint and ignores other people.
 - 🧵 **Memory** — remembers the flow of your chat within a session.
 - 📄 **Makes documents** — real PowerPoint, Word, and Excel files from an idea.
-- 🐙 **GitHub** — pushes what it creates to your repos.
+- 🐙 **GitHub** — pushes what it creates to your repos, and clones them back.
+- 💻 **Writes code** — scripts, web pages, and whole project scaffolds.
+- 🖥️ **Runs commands** — opt-in, with destructive operations refused outright.
 - 🔌 **Pluggable skills** — instant answers for time/date, easy to extend.
 - 🪶 **Graceful fallback** — every optional feature degrades cleanly instead of crashing.
 
@@ -258,6 +260,74 @@ Prose documents follow fixed rules:
 
 `report` in your request selects report rules, e.g. *"write a report on X"*.
 
+## 💻 Writing code
+
+```
+"write a python script that renames files by their modified date"
+"make an html page for my portfolio"
+"write a sql query to find duplicate emails"
+```
+
+The file is saved under `beastt_workspace/`, and you can push it to GitHub the
+same way as a document.
+
+### Project layouts
+
+```
+"what project layouts can you do"
+"create a flask project called notes-api"
+"set up a static site called my-portfolio"
+```
+
+| Layout | Contents |
+|--------|----------|
+| `python-cli` | argparse app with an entry point |
+| `python-package` | Installable package with a test and `pyproject.toml` |
+| `flask` | App, template, stylesheet, requirements |
+| `fastapi` | Service with a typed request model |
+| `static-site` | HTML, CSS and JavaScript |
+
+Scaffolds are fixed templates rather than model output, so the structure is always
+correct -- only generated file *contents* can vary.
+
+## 🖥️ Running commands
+
+**Off by default.** Enable with `BEASTT_SHELL=on`.
+
+```
+"run git status"
+"run pip list"
+```
+
+Commands are vetted in three tiers:
+
+1. **Always refused** -- deletion (`rm -rf`, `del /f /s`), formatting, shutdown,
+   registry edits, `sudo`, force pushes, `git reset --hard`, piping the internet
+   into a shell, and similar. These cannot be confirmed past.
+2. **Run immediately** -- a short read-only allowlist: `git status`, `git log`,
+   `ls`, `python --version`, `pip list`, `ollama list`...
+3. **Confirmed first** -- everything else. The exact command is shown and you
+   answer yes or no.
+
+In voice mode *every* command is confirmed, because a misheard word should never
+execute. Commands never run through a shell, so pipes and chaining can't smuggle
+in extra work, and output is captured with a timeout.
+
+This reduces obvious footguns. It is not a sandbox -- keep `BEASTT_SHELL=off`
+unless you want it.
+
+## 📥 Cloning repositories
+
+```
+"clone my notes repo"
+"clone owner/some-repo"
+"pull the latest in project-beastt"
+```
+
+Repositories land in `beastt_workspace/`. Private repos use your token for the
+clone only -- the remote is rewritten afterwards so no credential is left in
+`.git/config`, and the token is never echoed in output.
+
 ## ⚙️ Configuration
 
 Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
@@ -276,6 +346,8 @@ Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 | Ask which repo | `BEASTT_GITHUB_ASK` | `on` |
 | Document palette | `BEASTT_DOC_THEME` | `navy` |
 | Slide images | `BEASTT_IMAGES` | `on` |
+| Coding help | `BEASTT_CODE` | `on` |
+| Run commands | `BEASTT_SHELL` | `off` |
 | Voice lock (advanced) | `BEASTT_MY_VOICE_ONLY` | `off` |
 | Voice-lead margin | `BEASTT_SPEAKER_MARGIN` | `0.04` |
 

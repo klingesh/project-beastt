@@ -84,6 +84,11 @@ class Config:
     # Ask which repo to push to instead of silently using the default.
     github_ask: bool = _get("BEASTT_GITHUB_ASK", "on").lower() in ("on", "true", "1", "yes")
 
+    # Coding help: writing files, scaffolding projects, cloning repositories.
+    code_enabled: bool = _get("BEASTT_CODE", "on").lower() in ("on", "true", "1", "yes")
+    # Running shell commands. Off by default: it is the riskiest capability here.
+    shell_enabled: bool = _get("BEASTT_SHELL", "off").lower() in ("on", "true", "1", "yes")
+
     # Web search
     search_enabled: bool = _get("BEASTT_SEARCH", "on").lower() in ("on", "true", "1", "yes")
     search_max_results: int = int(_get("BEASTT_SEARCH_RESULTS", "5"))

@@ -12,6 +12,7 @@ env/
 # Runtime data and generated files
 beastt_memory/
 beastt_output/
+beastt_workspace/
 *.log
 
 # OS / editor
