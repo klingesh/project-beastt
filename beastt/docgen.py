@@ -194,6 +194,11 @@ def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
             for field in ("image_query", "stat", "stat_label", "quote", "attribution"):
                 if item.get(field):
                     slide[field] = _clean(item[field])[:200]
+            if slide["layout"] == "image":
+                # Keep the search on-topic even if the model's query is vague.
+                slide["image_query"] = image_query_for(
+                    slide.get("image_query") or slide["title"], topic
+                )
             for side in ("left", "right"):
                 col = item.get(side)
                 if isinstance(col, dict):
@@ -218,7 +223,7 @@ def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
             if s["title"] or s["bullets"] or s.get("stat") or s.get("quote")
             or s.get("timeline") or s.get("left") or s.get("right")
         ]
-        _ensure_visuals(slides)
+        _ensure_visuals(slides, topic)
         out["slides"] = slides
         if spec.get("cover_query"):
             out["cover_query"] = _clean(spec["cover_query"])[:80]
@@ -257,7 +262,42 @@ def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
     return out
 
 
-def _ensure_visuals(slides: list, wanted: int = 2) -> None:
+# Slide titles that say nothing about the subject, so they make poor image
+# search terms on their own ("Challenges and Opportunities" found a photo of a
+# man demonstrating a drilling alternative).
+_GENERIC_TITLES = re.compile(
+    r"^(the\s+)?(problem|problems|challenge|challenges|opportunit\w*|overview|"
+    r"introduction|background|context|conclusion|summary|next steps|"
+    r"recommendations|findings|results|benefits|advantages|disadvantages|"
+    r"key\s+\w+|why\s+\w+\s+matters?|what\s+is\s+it|how\s+it\s+works|"
+    r"the\s+future|looking\s+ahead|our\s+approach)\b",
+    re.IGNORECASE,
+)
+
+
+def image_query_for(title: str, topic: str) -> str:
+    """Build a photo search term that stays on-subject.
+
+    A generic heading is replaced by the deck's topic; a specific heading is
+    combined with it, so the photograph matches the subject rather than an
+    unrelated reading of the words.
+    """
+    title = _clean(title)
+    topic = _clean(topic)
+    if not title or _GENERIC_TITLES.match(title):
+        return topic or title
+    # Keep it short: search engines do better with a few strong nouns.
+    words = [w for w in f"{title} {topic}".split() if len(w) > 2]
+    seen, ordered = set(), []
+    for word in words:
+        low = word.lower()
+        if low not in seen:
+            seen.add(low)
+            ordered.append(word)
+    return " ".join(ordered[:5])
+
+
+def _ensure_visuals(slides: list, topic: str = "", wanted: int = 2) -> None:
     """Promote a couple of bullet slides to the image layout.
 
     Models often ignore the instruction to vary layouts and return an all-bullets
@@ -271,15 +311,16 @@ def _ensure_visuals(slides: list, wanted: int = 2) -> None:
 
     # Prefer middle slides with a title and few bullets -- they have room for art.
     candidates = [
-        (index, slide)
-        for index, slide in enumerate(slides)
+        slide
+        for slide in slides
         if str(slide.get("layout") or "bullets").lower() == "bullets"
         and slide.get("title")
         and len(slide.get("bullets") or []) <= 4
     ]
-    for index, slide in candidates[1 : 1 + wanted]:
+    for slide in candidates[1 : 1 + wanted]:
         slide["layout"] = "image"
-        slide.setdefault("image_query", slide["title"])
+        if not slide.get("image_query"):
+            slide["image_query"] = image_query_for(slide["title"], topic)
 
 
 def _is_thin(kind: str, spec: Dict) -> bool:

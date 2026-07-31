@@ -236,14 +236,22 @@ def comparison(sb, item, number, total, picture=None):
     slide = sb.new()
     sb.header(slide, item.get("title", ""))
 
-    left_col = item.get("left") or {}
-    right_col = item.get("right") or {}
-    # Fall back to splitting the bullets if the model didn't structure it.
-    if not left_col and not right_col:
-        points = [str(b) for b in (item.get("bullets") or [])]
+    left_col = dict(item.get("left") or {})
+    right_col = dict(item.get("right") or {})
+
+    # Models sometimes supply the two headings but leave the points empty, which
+    # would render as two bare labels. Fill them from the slide's bullets, and
+    # fall back to a bullet slide if there's nothing to put in the columns.
+    has_points = bool(left_col.get("points")) or bool(right_col.get("points"))
+    if not has_points:
+        points = [str(b) for b in (item.get("bullets") or []) if str(b).strip()]
+        if not points:
+            return bullets(sb, item, number, total)
         half = (len(points) + 1) // 2
-        left_col = {"heading": "Now", "points": points[:half]}
-        right_col = {"heading": "Next", "points": points[half:]}
+        left_col.setdefault("heading", "Now")
+        right_col.setdefault("heading", "Next")
+        left_col["points"] = points[:half]
+        right_col["points"] = points[half:]
 
     top = Inches(1.7)
     height = sb.H - top - Inches(1.3)
@@ -290,8 +298,12 @@ def stat(sb, item, number, total, picture=None):
         frame = sb.frame(slide, sb.MARGIN, Inches(4.1), sb.W - sb.MARGIN * 2, Inches(0.9))
         sb.write(frame, label, 20, sb.th.text_muted, align=PP_ALIGN.CENTER, first=True)
 
-    rest = [str(b) for b in (item.get("bullets") or [])][1:]
-    if rest:
+    # Supporting points, minus any that just repeat the headline figure.
+    rest = [
+        str(b) for b in (item.get("bullets") or [])
+        if str(b).strip() and str(b).strip() != value.strip()
+    ]
+    if len(rest) >= 2:
         frame = sb.frame(slide, sb.MARGIN, Inches(5.0), sb.W - sb.MARGIN * 2, Inches(1.0))
         sb.write(frame, "   ".join(f"▪  {b}" for b in rest[:3]), 13,
                  sb.th.text_dark, align=PP_ALIGN.CENTER, first=True)
