@@ -134,9 +134,36 @@ def from_design(design, fallback_name: str = "navy") -> Theme:
 # to a substitute the user didn't choose.
 _SAFE_FONTS = {
     "Calibri", "Calibri Light", "Segoe UI", "Segoe UI Light", "Arial",
-    "Helvetica", "Georgia", "Garamond", "Times New Roman", "Verdana",
-    "Trebuchet MS", "Tahoma", "Franklin Gothic Book", "Cambria", "Constantia",
+    "Helvetica", "Helvetica Neue", "Georgia", "Garamond", "Times New Roman",
+    "Verdana", "Trebuchet MS", "Tahoma", "Franklin Gothic Book", "Cambria",
+    "Constantia", "SF Pro Text", "SF Pro Display",
 }
+
+
+# --- typography rules for prose documents ----------------------------------
+# Reports are formal: always a serif. Other Word documents may use either the
+# serif or Apple's system font, and the model picks whichever suits the subject.
+REPORT_FONT = "Times New Roman"
+SF_PRO = "SF Pro Text"          # falls back gracefully on Windows
+DOC_FONT_CHOICES = (REPORT_FONT, SF_PRO)
+
+
+def prose_fonts(is_report: bool, preference: str = "") -> tuple:
+    """Return (heading_font, body_font) for a Word document or report.
+
+    Reports are pinned to Times New Roman. For other documents a stated
+    preference is honoured if it's one of the allowed faces, otherwise the serif
+    is used as a safe default.
+    """
+    if is_report:
+        return REPORT_FONT, REPORT_FONT
+    wanted = str(preference or "").strip().lower()
+    for choice in DOC_FONT_CHOICES:
+        if wanted and (wanted in choice.lower() or choice.lower().startswith(wanted)):
+            return choice, choice
+    if "sf" in wanted or "apple" in wanted or "san francisco" in wanted:
+        return SF_PRO, SF_PRO
+    return REPORT_FONT, REPORT_FONT
 
 
 def describe(theme: Theme) -> str:

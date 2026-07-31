@@ -46,6 +46,14 @@ _FORMAT_WORDS = re.compile(
 )
 
 
+_REPORT = re.compile(r"\breports?\b", re.IGNORECASE)
+
+
+def is_report(text: str) -> bool:
+    """A report is a stricter kind of Word document (fixed serif typography)."""
+    return bool(_REPORT.search(text))
+
+
 def detect_kind(text: str) -> str:
     for kind, pattern in _KINDS:
         if re.search(pattern, text, re.IGNORECASE):
@@ -136,9 +144,20 @@ class DocumentSkill(Skill):
                 "Try describing the topic a bit more specifically?"
             )
 
-        theme = _resolve_theme(spec, Config.load().doc_theme)
+        config = Config.load()
+        if kind == "document":
+            spec["is_report"] = is_report(text)
+
+        theme = _resolve_theme(spec, config.doc_theme)
+        finder = None
+        if kind == "presentation" and config.images_enabled:
+            from ..images import ImageFinder
+
+            finder = ImageFinder(enabled=True)
+            print("[docs] Looking for suitable images...")
+
         try:
-            path = build(kind, spec, theme_name=theme)
+            path = build(kind, spec, theme_name=theme, finder=finder)
         except MissingLibrary as exc:
             return str(exc)
         except Exception as exc:

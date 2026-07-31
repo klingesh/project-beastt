@@ -49,7 +49,7 @@ def _resolve_theme(spec: Dict, theme_name):
 
 
 # --- PowerPoint -------------------------------------------------------------
-def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
+def build_presentation(spec: Dict, theme_name: str = "navy", finder=None) -> Path:
     """Render a designed 16:9 slide deck.
 
     Spec: {title, subtitle, slides:[{title, bullets[], notes, key_message}]}
@@ -122,6 +122,21 @@ def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
 
     slides = [s for s in spec.get("slides", []) if isinstance(s, dict)]
 
+    # ---- Cover image, when one is available ------------------------------
+    if finder is not None:
+        cover = finder.find(spec.get("cover_query") or title, orientation="wide")
+        if cover is not None:
+            try:
+                # Right-hand band, so the title text stays legible.
+                pic = slide.shapes.add_picture(
+                    str(cover.path), int(SW * 0.58), 0, height=SH
+                )
+                if pic.width > SW * 0.42:
+                    pic.left = int(SW - pic.width)
+                slide.notes_slide.notes_text_frame.text = f"Cover image: {cover.credit()}"
+            except Exception:
+                pass
+
     # ---- Agenda slide, derived from the deck's own structure --------------
     headings = [str(s.get("title") or "").strip() for s in slides]
     headings = [h for h in headings if h]
@@ -138,65 +153,33 @@ def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
                          space_after=14, first=(idx == 1))
             para.runs[0].font.name = th.body_font
 
-    # ---- Content slides ---------------------------------------------------
+    # ---- Content slides, each drawn by its chosen layout ------------------
+    from .layouts import SlideBuilder, normalise, render
+
+    builder = SlideBuilder(prs, th, title)
     total = len(slides)
     for number, item in enumerate(slides, 1):
-        slide = prs.slides.add_slide(BLANK)
-
-        # Header band + accent rule
-        rect(slide, 0, 0, SW, Inches(1.15), th.primary)
-        rect(slide, 0, Inches(1.15), SW, Pt(4), th.accent)
-
-        frame = textbox(slide, Inches(0.7), Inches(0.22), SW - Inches(1.4), Inches(0.8))
-        write(frame, str(item.get("title") or ""), th.slide_title_size, on_primary,
-              bold=True, font=th.heading_font, first=True)
-
-        bullets = [str(b).strip() for b in (item.get("bullets") or []) if str(b).strip()]
-        key = str(item.get("key_message") or "").strip()
-
-        body_top = Inches(1.65)
-        body_height = SH - body_top - Inches(1.2)
-
-        if bullets:
-            # Two columns once there are enough bullets to look sparse in one.
-            two_col = len(bullets) >= 5
-            col_width = (SW - Inches(1.8)) / (2 if two_col else 1)
-            groups = (
-                [bullets[: (len(bullets) + 1) // 2], bullets[(len(bullets) + 1) // 2 :]]
-                if two_col
-                else [bullets]
+        layout = normalise(item.get("layout") or "bullets")
+        picture = None
+        if layout == "image" and finder is not None:
+            picture = finder.find(
+                item.get("image_query") or item.get("title") or title,
+                orientation="square",
             )
-            for col, group in enumerate(groups):
-                if not group:
-                    continue
-                left = Inches(0.9) + Emu(int(col_width)) * col
-                frame = textbox(slide, left, body_top,
-                                Emu(int(col_width)) - Inches(0.3), body_height)
-                frame.vertical_anchor = MSO_ANCHOR.TOP
-                for idx, bullet in enumerate(group):
-                    para = write(frame, f"▪   {bullet}", th.bullet_size, th.text_dark,
-                                 space_after=12, first=(idx == 0))
-                    para.line_spacing = 1.15
+        render(layout, builder, item, number, total, picture)
 
-        # Key takeaway panel, when the model supplied one.
-        if key:
-            panel_top = SH - Inches(1.55)
-            rect(slide, Inches(0.9), panel_top, SW - Inches(1.8), Inches(0.72), th.light)
-            rect(slide, Inches(0.9), panel_top, Pt(5), Inches(0.72), th.accent)
-            frame = textbox(slide, Inches(1.15), panel_top + Inches(0.12),
-                            SW - Inches(2.3), Inches(0.5))
-            write(frame, key, 14, th.secondary, bold=True, first=True)
-
-        # Footer: deck title and slide number.
-        frame = textbox(slide, Inches(0.9), SH - Inches(0.55), SW - Inches(3), Inches(0.35))
-        write(frame, title, th.caption_size, th.text_muted, first=True)
-        frame = textbox(slide, SW - Inches(1.6), SH - Inches(0.55), Inches(0.9), Inches(0.35))
-        write(frame, f"{number} / {total}", th.caption_size, th.text_muted,
-              align=PP_ALIGN.RIGHT, first=True)
-
-        notes = item.get("notes")
-        if notes:
-            slide.notes_slide.notes_text_frame.text = str(notes)
+    # ---- Image credits, as the licences require ---------------------------
+    if finder is not None and finder.credits:
+        slide = prs.slides.add_slide(BLANK)
+        rect(slide, 0, 0, SW, Inches(1.15), th.primary)
+        frame = textbox(slide, Inches(0.7), Inches(0.25), SW - Inches(1.4), Inches(0.7))
+        write(frame, "Image credits", th.slide_title_size, on_primary, bold=True,
+              font=th.heading_font, first=True)
+        frame = textbox(slide, Inches(0.9), Inches(1.7), SW - Inches(1.8),
+                        SH - Inches(2.4))
+        for idx, picture in enumerate(finder.credits[:10]):
+            write(frame, picture.credit(), 11, th.text_muted, space_after=8,
+                  first=(idx == 0))
 
     # ---- Closing slide ----------------------------------------------------
     slide = prs.slides.add_slide(BLANK)
@@ -212,7 +195,7 @@ def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
 
 
 # --- Word -------------------------------------------------------------------
-def build_document(spec: Dict, theme_name: str = "navy") -> Path:
+def build_document(spec: Dict, theme_name: str = "navy", finder=None) -> Path:
     """Render a styled report.
 
     Spec: {title, subtitle, sections:[{heading, paragraphs[], bullets[]}]}
@@ -230,6 +213,19 @@ def build_document(spec: Dict, theme_name: str = "navy") -> Path:
         )
 
     th = _resolve_theme(spec, theme_name)
+
+    # Prose documents follow fixed typography rules: reports are always Times
+    # New Roman; other documents may use Times New Roman or SF Pro.
+    from dataclasses import replace as _replace
+
+    from .theme import prose_fonts
+
+    heading_font, body_font = prose_fonts(
+        bool(spec.get("is_report")),
+        (spec.get("design") or {}).get("font") if isinstance(spec.get("design"), dict) else "",
+    )
+    th = _replace(th, heading_font=heading_font, body_font=body_font)
+
     title = spec.get("title") or "Document"
     subtitle = spec.get("subtitle") or ""
 
@@ -316,7 +312,7 @@ def build_document(spec: Dict, theme_name: str = "navy") -> Path:
 
 
 # --- Excel ------------------------------------------------------------------
-def build_spreadsheet(spec: Dict, theme_name: str = "navy") -> Path:
+def build_spreadsheet(spec: Dict, theme_name: str = "navy", finder=None) -> Path:
     """Render a formatted workbook.
 
     Spec: {title, sheets:[{name, columns[], rows[[...]]}]}
@@ -410,8 +406,8 @@ BUILDERS = {
 }
 
 
-def build(kind: str, spec: Dict, theme_name: str = "navy") -> Path:
+def build(kind: str, spec: Dict, theme_name: str = "navy", finder=None) -> Path:
     builder = BUILDERS.get(kind)
     if builder is None:
         raise ValueError(f"Unknown document kind: {kind}")
-    return builder(spec, theme_name)
+    return builder(spec, theme_name, finder)

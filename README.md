@@ -210,6 +210,54 @@ pale AI-chosen colour stays readable. Content edits go to the model, and if its
 reply is unusable the previous version is kept -- an edit can do nothing, but it
 can't corrupt your document.
 
+## 📐 Slide layouts
+
+Decks mix layouts instead of repeating one template. The model picks per slide,
+and you can override it:
+
+| Layout | Use |
+|--------|-----|
+| `bullets` | General points (splits into two columns when long) |
+| `image` | Bullets on the left, photograph on the right |
+| `comparison` | Two headed columns -- before/after, pros/cons |
+| `stat` | One big headline number |
+| `quote` | Large pull-quote with attribution |
+| `timeline` | Horizontal sequence of dates or steps |
+| `section` | Full-colour divider |
+
+```
+"what layouts can you do"
+"use the timeline layout for slide 3"
+"use the image layout for the how it works slide"
+"use the comparison layout"          (applies to all slides)
+```
+
+## 🖼️ Images
+
+Presentations automatically get a cover photo and pictures on `image` slides,
+sourced from [Openverse](https://openverse.org) filtered to licences that permit
+commercial use and modification.
+
+**Attribution is added for you** -- each photo's creator and licence go into the
+slide's speaker notes, and an "Image credits" slide is appended. The CC licences
+these images use require that credit, so please keep it.
+
+Turn it off with `BEASTT_IMAGES=off`. If there's no network the deck still builds,
+using drawn graphics instead of photos.
+
+## 🔤 Typography
+
+Presentations use clean sans-serif faces chosen to suit the subject.
+
+Prose documents follow fixed rules:
+
+- **Reports are always Times New Roman.**
+- Other Word documents use Times New Roman or SF Pro Text, whichever the
+  assistant judges to fit -- serif for formal or academic subjects, SF Pro for
+  modern, product, or design ones.
+
+`report` in your request selects report rules, e.g. *"write a report on X"*.
+
 ## ⚙️ Configuration
 
 Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
@@ -227,6 +275,7 @@ Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 | GitHub token | `BEASTT_GITHUB_TOKEN` | (unset) |
 | Ask which repo | `BEASTT_GITHUB_ASK` | `on` |
 | Document palette | `BEASTT_DOC_THEME` | `navy` |
+| Slide images | `BEASTT_IMAGES` | `on` |
 | Voice lock (advanced) | `BEASTT_MY_VOICE_ONLY` | `off` |
 | Voice-lead margin | `BEASTT_SPEAKER_MARGIN` | `0.04` |
 

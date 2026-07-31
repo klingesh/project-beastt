@@ -18,16 +18,24 @@ _SCHEMAS = {
   "design": {"palette": "navy|slate|plum|ember|custom", "primary": "0B2545", "accent": "3DA5D9", "rationale": "why this suits the topic"},
   "title": "short deck title",
   "subtitle": "one-line value proposition",
+  "cover_query": "two or three words describing a photo for the cover",
   "slides": [
-    {"title": "slide title",
+    {"layout": "bullets|image|comparison|stat|quote|timeline|section",
+     "title": "slide title",
      "bullets": ["short bullet", "short bullet"],
      "key_message": "the single takeaway from this slide",
-     "notes": "speaker notes"}
+     "notes": "speaker notes",
+     "image_query": "subject of a supporting photo (only for layout image)",
+     "left": {"heading": "Option A", "points": ["point"]},
+     "right": {"heading": "Option B", "points": ["point"]},
+     "stat": "68%", "stat_label": "what the number means",
+     "quote": "a quotation", "attribution": "who said it",
+     "timeline": [{"label": "2020", "text": "what happened"}]}
   ],
   "closing": "closing line, e.g. Thank you"
 }""",
     "document": """{
-  "design": {"palette": "navy|slate|plum|ember|custom", "primary": "0B2545", "accent": "3DA5D9", "rationale": "why this suits the topic"},
+  "design": {"palette": "navy|slate|plum|ember|custom", "primary": "0B2545", "accent": "3DA5D9", "font": "Times New Roman|SF Pro Text", "rationale": "why this suits the topic"},
   "title": "document title",
   "subtitle": "one-line summary",
   "sections": [
@@ -50,7 +58,11 @@ _GUIDANCE = {
         "one-sentence key_message, and useful speaker notes. Include concrete "
         "figures, dates, or examples where you can. Avoid generic filler."
     ),
-    "document": "Aim for 4-6 sections with substantive paragraphs (2-4 sentences each).",
+    "document": (
+        "Aim for 4-6 sections with substantive paragraphs (2-4 sentences each). "
+        "For \"design\".\"font\" pick either \"Times New Roman\" for formal or academic "
+        "subjects, or \"SF Pro Text\" for modern, product, or design subjects."
+    ),
     "spreadsheet": "Design sensible columns and 8-15 realistic example rows. Numbers as numbers.",
 }
 
@@ -63,6 +75,12 @@ Rules:
 - {guidance}
 - Be specific and useful -- real facts and concrete detail, not placeholders.
 - Keep all strings plain text: no markdown, asterisks, or newline characters.
+- Vary the slide layouts to suit the content: "bullets" for general points,
+  "image" when a photograph helps, "comparison" for two options or before/after,
+  "stat" for a single headline number, "quote" for a striking statement,
+  "timeline" for a sequence of dates or steps, "section" as a divider. Include
+  only the fields that layout needs, and roughly half the slides should be
+  "bullets". Give an "image_query" for every "image" slide.
 - Choose a "design" that fits the subject: pick one of the named palettes, or set
   "palette": "custom" with your own dark "primary" and bright "accent" hex colours
   (no '#'). Corporate/finance suits navy or slate; nature and health suit greens;
@@ -131,15 +149,38 @@ def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
             if not isinstance(item, dict):
                 continue
             bullets = [_clean(b) for b in (item.get("bullets") or []) if _clean(b)]
-            slides.append(
-                {
-                    "title": _clean(item.get("title") or "")[:120],
-                    "bullets": bullets[:8],
-                    "key_message": _clean(item.get("key_message") or "")[:180] or None,
-                    "notes": _clean(item.get("notes") or "")[:600] or None,
-                }
-            )
+            slide = {
+                "layout": _clean(item.get("layout") or "bullets").lower(),
+                "title": _clean(item.get("title") or "")[:120],
+                "bullets": bullets[:8],
+                "key_message": _clean(item.get("key_message") or "")[:180] or None,
+                "notes": _clean(item.get("notes") or "")[:600] or None,
+            }
+            # Carry through the fields the chosen layout needs.
+            for field in ("image_query", "stat", "stat_label", "quote", "attribution"):
+                if item.get(field):
+                    slide[field] = _clean(item[field])[:200]
+            for side in ("left", "right"):
+                col = item.get(side)
+                if isinstance(col, dict):
+                    slide[side] = {
+                        "heading": _clean(col.get("heading") or "")[:60],
+                        "points": [_clean(x) for x in (col.get("points") or []) if _clean(x)][:6],
+                    }
+            steps = item.get("timeline") or item.get("steps")
+            if isinstance(steps, list) and steps:
+                cleaned = []
+                for step in steps[:5]:
+                    if isinstance(step, dict):
+                        cleaned.append({"label": _clean(step.get("label") or "")[:24],
+                                        "text": _clean(step.get("text") or "")[:120]})
+                    else:
+                        cleaned.append({"label": "", "text": _clean(step)[:120]})
+                slide["timeline"] = cleaned
+            slides.append(slide)
         out["slides"] = slides
+        if spec.get("cover_query"):
+            out["cover_query"] = _clean(spec["cover_query"])[:80]
         if spec.get("closing"):
             out["closing"] = _clean(spec["closing"])[:80]
     elif kind == "document":

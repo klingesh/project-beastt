@@ -69,7 +69,7 @@ _REVISION_INTENT = re.compile(
     r"use|swap|adjust|tweak|improve|polish|simplify|split|merge|reorder|move|"
     r"fix|update|title|slide|section|sheet|column|row|bullet|bullets|tone|"
     r"colour|color|palette|theme|font|professional|formal|casual|regenerate|"
-    r"redo|again)\b",
+    r"redo|again|layout|layouts|image|images|photo|chart|timeline|quote|stat)\b",
     re.IGNORECASE,
 )
 
@@ -207,9 +207,59 @@ class Workshop:
             return self.spec.setdefault("sections", []), "sections", "heading"
         return None, "", ""
 
+    _LAYOUT_FOR = re.compile(
+        r"\b(?:use|make|change|switch|set|turn)\b[^.]*?\b(?:the\s+)?"
+        r"(bullets?|image|photo|picture|comparison|compare|stat|statistic|number|"
+        r"quote|timeline|steps|section|divider)\b[^.]*?\blayout\b"
+        r"|(?:\blayout\b[^.]*?\b(bullets?|image|photo|comparison|stat|quote|timeline|section)\b)",
+        re.IGNORECASE,
+    )
+    _SLIDE_NUMBER = re.compile(r"\bslide\s+(\d{1,2})\b|\b(\d{1,2})(?:st|nd|rd|th)\s+slide\b",
+                               re.IGNORECASE)
+
+    def _layout_edit(self, text: str) -> Optional[str]:
+        """Change a slide's layout, e.g. "use the timeline layout for slide 3"."""
+        from .layouts import normalise
+
+        if self.kind != "presentation":
+            return None
+        match = self._LAYOUT_FOR.search(text)
+        if not match:
+            return None
+        wanted = normalise(next(g for g in match.groups() if g))
+
+        slides = self.spec.get("slides") or []
+        if not slides:
+            return None
+
+        number = self._SLIDE_NUMBER.search(text)
+        if number:
+            index = int(number.group(1) or number.group(2)) - 1
+            if 0 <= index < len(slides):
+                slides[index]["layout"] = wanted
+                return f"slide {index + 1} now uses the {wanted} layout"
+            return None
+
+        # No slide named: try matching a title mentioned in the request.
+        lowered = text.lower()
+        for index, slide in enumerate(slides):
+            title = str(slide.get("title") or "").lower()
+            if title and title in lowered:
+                slide["layout"] = wanted
+                return f"{slide.get('title')!r} now uses the {wanted} layout"
+
+        # Otherwise apply to every content slide.
+        for slide in slides:
+            slide["layout"] = wanted
+        return f"all slides now use the {wanted} layout"
+
     def _structural_edit(self, brain: Brain, text: str) -> Optional[str]:
-        """Handle add / remove / shorten / retitle without a full rewrite."""
+        """Handle add / remove / shorten / retitle / layout without a full rewrite."""
         from .docgen import new_item
+
+        layout_change = self._layout_edit(text)
+        if layout_change:
+            return layout_change
 
         items, label, key = self._items()
 
@@ -270,6 +320,11 @@ class Workshop:
 
         return None
 
+    _LIST_LAYOUTS = re.compile(
+        r"\b(?:list|show|what|which)\b[^.?!]*\blayouts?\b|\blayout options\b",
+        re.IGNORECASE,
+    )
+
     # --- applying a revision ----------------------------------------------
     def revise(self, brain: Brain, text: str) -> str:
         """Apply an instruction to the current document and re-render it."""
@@ -278,6 +333,16 @@ class Workshop:
 
         if not self.active:
             return "There's no document open at the moment."
+
+        # Just answering a question about layouts -- no edit needed.
+        if self._LIST_LAYOUTS.search(text):
+            from .layouts import describe
+
+            return (
+                "These are the slide layouts I can use:\n" + describe() +
+                "\n\nSay something like \"use the timeline layout for slide 3\" "
+                "or \"use the image layout for the costs slide\"."
+            )
 
         notes = []
 
@@ -324,9 +389,21 @@ class Workshop:
                         "\"rename the title to X\"."
                     )
 
-        # 3. Re-render.
+        # 3. Re-render, fetching images if any slide asks for them.
+        finder = None
+        if self.kind == "presentation":
+            from .config import Config
+            from .images import ImageFinder
+
+            wants_images = any(
+                str(s.get("layout", "")).lower() in ("image", "photo", "picture")
+                for s in (self.spec.get("slides") or [])
+            )
+            if wants_images and Config.load().images_enabled:
+                finder = ImageFinder(enabled=True)
+
         try:
-            self.path = build(self.kind, self.spec, theme_name=self.theme)
+            self.path = build(self.kind, self.spec, theme_name=self.theme, finder=finder)
         except MissingLibrary as exc:
             return str(exc)
         except Exception as exc:

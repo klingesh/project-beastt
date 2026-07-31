@@ -72,6 +72,8 @@ class Config:
     # Documents (PowerPoint / Word / Excel generation)
     documents_enabled: bool = _get("BEASTT_DOCUMENTS", "on").lower() in ("on", "true", "1", "yes")
     doc_theme: str = _get("BEASTT_DOC_THEME", "navy")   # navy | slate | plum | ember
+    # Openly-licensed photos in presentations (attribution is added automatically).
+    images_enabled: bool = _get("BEASTT_IMAGES", "on").lower() in ("on", "true", "1", "yes")
 
     # GitHub access (push generated files, browse repos)
     github_token: str = _get("BEASTT_GITHUB_TOKEN", "")
