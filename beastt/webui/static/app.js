@@ -9,11 +9,18 @@
     input: $("input"), send: $("send"), title: $("chatTitle"),
     del: $("deleteChat"), openSidebar: $("openSidebar"), closeSidebar: $("closeSidebar"),
     brandName: $("brandName"), greetName: $("greetName"), modelInfo: $("modelInfo"),
+    attachBtn: $("attachBtn"), fileInput: $("fileInput"), attachments: $("attachments"),
+    repoBtn: $("repoBtn"), repoLabel: $("repoLabel"), repoModal: $("repoModal"),
+    repoList: $("repoList"), repoFilter: $("repoFilter"),
+    repoCancel: $("repoCancel"), repoUnlink: $("repoUnlink"),
   };
 
   let chatId = null;
   let busy = false;
   let name = "JARVIS";
+  let repo = "";
+  let attachments = [];
+  let repos = [];
 
   // ---------- helpers ----------
   const api = async (path, options = {}) => {
@@ -88,15 +95,156 @@
     return wrap;
   };
 
+  // ---------- attachments ----------
+  const renderAttachments = () => {
+    el.attachments.innerHTML = "";
+    attachments.forEach((file) => {
+      const chipEl = document.createElement("span");
+      chipEl.className = "attach-chip";
+      chipEl.innerHTML =
+        `<span class="ac-name">${escapeHtml(file.name)}</span>` +
+        `<span class="ac-note">${escapeHtml(file.note || "")}</span>` +
+        `<button class="ac-x" title="Remove">&times;</button>`;
+      chipEl.querySelector(".ac-x").onclick = async () => {
+        if (!chatId) return;
+        const data = await api(`/api/chats/${chatId}/detach`, {
+          method: "POST", body: JSON.stringify({ name: file.name }),
+        });
+        attachments = data.attachments || [];
+        renderAttachments();
+      };
+      el.attachments.appendChild(chipEl);
+    });
+  };
+
+  const readAsBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+  const uploadFiles = async (files) => {
+    for (const file of files) {
+      const pending = document.createElement("span");
+      pending.className = "attach-chip pending";
+      pending.textContent = `Reading ${file.name}…`;
+      el.attachments.appendChild(pending);
+      try {
+        const data = await api("/api/upload", {
+          method: "POST",
+          body: JSON.stringify({
+            chat_id: chatId, name: file.name, data: await readAsBase64(file),
+          }),
+        });
+        pending.remove();
+        if (data.error) {
+          addMessage("assistant", `I couldn't attach ${file.name}: ${data.error}`);
+          continue;
+        }
+        chatId = data.chat_id;
+        attachments = data.attachments || [];
+        renderAttachments();
+        const cut = data.truncated ? " (only the first part will be used)" : "";
+        addMessage("assistant",
+          `Attached **${data.attachment.name}** — ${data.attachment.note}${cut}. Ask me anything about it.`);
+        refreshList();
+      } catch (err) {
+        pending.remove();
+        addMessage("assistant", `Something went wrong attaching ${file.name}.`);
+      }
+    }
+  };
+
+  // ---------- repository link ----------
+  const setRepoLabel = () => {
+    el.repoLabel.textContent = repo || "Link repo";
+    el.repoBtn.classList.toggle("linked", Boolean(repo));
+  };
+
+  const renderRepos = (filter = "") => {
+    const term = filter.trim().toLowerCase();
+    const shown = repos.filter((r) => !term || r.name.toLowerCase().includes(term));
+    el.repoList.innerHTML = "";
+    if (!shown.length) {
+      el.repoList.innerHTML = `<div class="muted" style="padding:10px">No repositories found.</div>`;
+      return;
+    }
+    shown.forEach((r) => {
+      const row = document.createElement("div");
+      row.className = "repo-item" + (r.name === repo ? " active" : "");
+      row.innerHTML = `${escapeHtml(r.name)}${r.private ? ' <span class="muted">private</span>' : ""}`;
+      row.onclick = () => linkRepo(r.name);
+      el.repoList.appendChild(row);
+    });
+  };
+
+  const linkRepo = async (chosen) => {
+    if (!chatId) {
+      // A repo needs a chat to belong to, so start one.
+      const created = await api("/api/chats", { method: "POST" });
+      chatId = created.id;
+    }
+    await api(`/api/chats/${chatId}/repo`, {
+      method: "POST", body: JSON.stringify({ repo: chosen }),
+    });
+    repo = chosen;
+    setRepoLabel();
+    el.repoModal.classList.add("hidden");
+    addMessage("assistant", chosen
+      ? `Linked to **${chosen}**. I'll read from and push to that repo in this chat.`
+      : "Unlinked. I'll use the default repo from your settings.");
+    refreshList();
+  };
+
+  const openRepoPicker = async () => {
+    el.repoModal.classList.remove("hidden");
+    el.repoList.innerHTML = `<div class="muted" style="padding:10px">Loading…</div>`;
+    const data = await api("/api/repos");
+    if (data.error && !(data.repos || []).length) {
+      el.repoList.innerHTML = `<div class="muted" style="padding:10px">${escapeHtml(data.error)}</div>`;
+      return;
+    }
+    repos = data.repos || [];
+    el.repoFilter.value = "";
+    renderRepos();
+    el.repoFilter.focus();
+  };
+
   // ---------- chat list ----------
+  const renameChat = async (id, current) => {
+    const title = prompt("Rename this chat:", current || "");
+    if (title === null) return;
+    await api(`/api/chats/${id}/rename`, {
+      method: "POST", body: JSON.stringify({ title }),
+    });
+    if (id === chatId) el.title.textContent = title.trim() || "Untitled";
+    refreshList();
+  };
+
   const renderList = (items) => {
     el.chatList.innerHTML = "";
     items.forEach((chat) => {
       const row = document.createElement("div");
       row.className = "chat-item" + (chat.id === chatId ? " active" : "");
-      row.textContent = chat.title;
-      row.title = `${chat.count} message(s)`;
+      row.title = `${chat.count} message(s) — double-click to rename`;
+      const label = document.createElement("span");
+      label.className = "ci-title";
+      label.textContent = chat.title;
+      const edit = document.createElement("button");
+      edit.className = "ci-edit";
+      edit.textContent = "✎";
+      edit.title = "Rename";
+      edit.onclick = (event) => {
+        event.stopPropagation();
+        renameChat(chat.id, chat.title);
+      };
+      row.append(label, edit);
       row.onclick = () => openChat(chat.id);
+      row.ondblclick = (event) => {
+        event.preventDefault();
+        renameChat(chat.id, chat.title);
+      };
       el.chatList.appendChild(row);
     });
     if (!items.length) {
@@ -128,6 +276,10 @@
     if (chat.error) return;
     chatId = chat.id;
     el.title.textContent = chat.title || "Chat";
+    repo = chat.repo || "";
+    attachments = chat.attachments || [];
+    setRepoLabel();
+    renderAttachments();
     clearThread();
     (chat.messages || []).forEach((m) => addMessage(m.role, m.content));
     if ((chat.messages || []).length && el.empty) el.empty.style.display = "none";
@@ -137,7 +289,11 @@
 
   const startNew = async () => {
     chatId = null;
+    repo = "";
+    attachments = [];
     el.title.textContent = "New chat";
+    setRepoLabel();
+    renderAttachments();
     clearThread();
     refreshList();
     el.input.focus();
@@ -162,6 +318,8 @@
       } else {
         chatId = data.chat_id;
         el.title.textContent = data.title || "Chat";
+        if (data.repo !== undefined) { repo = data.repo; setRepoLabel(); }
+        if (data.attachments) { attachments = data.attachments; renderAttachments(); }
         addMessage("assistant", data.reply);
         refreshList();
       }
@@ -211,6 +369,45 @@
 
   document.querySelectorAll(".chip").forEach((chip) => {
     chip.onclick = () => send(chip.textContent);
+  });
+
+  // Rename by clicking the title.
+  el.title.onclick = () => {
+    if (chatId) renameChat(chatId, el.title.textContent);
+  };
+
+  // Attachments: button, file picker, and drag-and-drop.
+  el.attachBtn.onclick = () => el.fileInput.click();
+  el.fileInput.onchange = () => {
+    if (el.fileInput.files.length) uploadFiles([...el.fileInput.files]);
+    el.fileInput.value = "";
+  };
+  ["dragenter", "dragover"].forEach((event) =>
+    document.addEventListener(event, (e) => {
+      e.preventDefault();
+      document.body.classList.add("dropping");
+    }));
+  ["dragleave", "drop"].forEach((event) =>
+    document.addEventListener(event, (e) => {
+      e.preventDefault();
+      if (event === "dragleave" && e.relatedTarget) return;
+      document.body.classList.remove("dropping");
+    }));
+  document.addEventListener("drop", (e) => {
+    const files = [...(e.dataTransfer?.files || [])];
+    if (files.length) uploadFiles(files);
+  });
+
+  // Repository picker.
+  el.repoBtn.onclick = openRepoPicker;
+  el.repoCancel.onclick = () => el.repoModal.classList.add("hidden");
+  el.repoUnlink.onclick = () => linkRepo("");
+  el.repoFilter.oninput = () => renderRepos(el.repoFilter.value);
+  el.repoModal.onclick = (event) => {
+    if (event.target === el.repoModal) el.repoModal.classList.add("hidden");
+  };
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") el.repoModal.classList.add("hidden");
   });
 
   // ---------- startup ----------

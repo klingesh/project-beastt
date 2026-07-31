@@ -150,6 +150,7 @@ class Assistant:
         #    search first if the question needs current information.
         self.memory.add_user(text)
         messages = self.memory.messages()
+        messages = self._augment_with_attachments(messages)
         messages = self._augment_with_memories(text, messages)
         if self.search is not None and needs_search(text):
             messages = self._augment_with_search(text, messages)
@@ -189,6 +190,30 @@ class Assistant:
         context = format_results(results)
         note = Message(role="system", content=_SEARCH_INSTRUCTION + context)
         return [*messages, note]
+
+    def set_attachments(self, text: str, names=None) -> None:
+        """Provide file contents as background context for this conversation.
+
+        Used by the web interface when files are attached to a chat, so questions
+        can be answered about them without re-uploading each turn.
+        """
+        self._attachment_text = text or ""
+        self._attachment_names = list(names or [])
+
+    def _augment_with_attachments(self, messages):
+        if not getattr(self, "_attachment_text", ""):
+            return messages
+        names = ", ".join(self._attachment_names) or "the attached file(s)"
+        note = Message(
+            role="system",
+            content=(
+                f"[{self.config.user_name} has attached these files to this "
+                f"conversation: {names}. Their contents follow. Use them to answer "
+                f"questions, and say so if something isn't in them.]\n\n"
+                f"{self._attachment_text}"
+            ),
+        )
+        return [messages[0], note, *messages[1:]]
 
     def _augment_with_memories(self, text: str, messages):
         """Prepend what BEASTT remembers about the user, when relevant."""

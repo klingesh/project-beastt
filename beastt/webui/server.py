@@ -10,10 +10,13 @@ on disk) is shared across all of them.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import mimetypes
 import threading
 import webbrowser
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Optional
@@ -38,7 +41,13 @@ class _State:
         with self._lock:
             found = self._assistants.get(chat_id)
             if found is None:
-                found = Assistant(config=self.config, verbose=False)
+                chat_config = self.config
+                # A chat linked to a repository uses it as the default target,
+                # so pushes and reads in this thread go to the right place.
+                linked = (chats.load(chat_id) or {}).get("repo")
+                if linked:
+                    chat_config = replace(self.config, github_repo=linked)
+                found = Assistant(config=chat_config, verbose=False)
                 # Replay the transcript so the thread keeps its context after a
                 # page reload or a server restart.
                 chat = chats.load(chat_id)
@@ -134,6 +143,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/chats":
             return self._json({"chats": chats.listing()})
 
+        if path == "/api/repos":
+            return self._repos()
+
         if path.startswith("/api/chats/"):
             chat = chats.load(path.rsplit("/", 1)[-1])
             if chat is None:
@@ -152,12 +164,95 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/message":
             return self._message(body)
 
-        if path.endswith("/rename") and path.startswith("/api/chats/"):
+        if path == "/api/upload":
+            return self._upload(body)
+
+        if path.startswith("/api/chats/"):
             chat_id = path.split("/")[3]
-            ok = chats.rename(chat_id, body.get("title", ""))
-            return self._json({"ok": ok}, 200 if ok else 404)
+
+            if path.endswith("/rename"):
+                ok = chats.rename(chat_id, body.get("title", ""))
+                return self._json({"ok": ok}, 200 if ok else 404)
+
+            if path.endswith("/repo"):
+                ok = chats.set_repo(chat_id, body.get("repo", ""))
+                # The assistant caches the repo, so rebuild it next turn.
+                self.state.forget(chat_id)
+                return self._json({"ok": ok}, 200 if ok else 404)
+
+            if path.endswith("/detach"):
+                chat = chats.load(chat_id)
+                if chat is None:
+                    return self._json({"error": "no such chat"}, 404)
+                ok = chats.remove_attachment(chat, body.get("name", ""))
+                return self._json({"ok": ok, "attachments": chat.get("attachments", [])})
 
         return self._json({"error": "not found"}, 404)
+
+    # --- repositories -----------------------------------------------------
+    def _repos(self):
+        config = self.state.config
+        if not config.github_token:
+            return self._json({
+                "repos": [],
+                "error": "No GitHub token set. Add BEASTT_GITHUB_TOKEN to your .env.",
+            })
+        try:
+            from ..github_client import GitHubClient
+
+            repos = GitHubClient(config.github_token).list_repos(limit=100)
+        except Exception as exc:
+            return self._json({"repos": [], "error": str(exc)[:160]})
+        return self._json({
+            "repos": [{"name": r["name"], "private": r["private"]} for r in repos],
+            "default": config.github_repo,
+        })
+
+    # --- attachments ------------------------------------------------------
+    def _upload(self, body: dict):
+        from ..readers import Unsupported, extract, supported
+
+        name = str(body.get("name") or "").strip()
+        chat_id = str(body.get("chat_id") or "").strip()
+        encoded = body.get("data") or ""
+        if not name or not encoded:
+            return self._json({"error": "nothing to upload"}, 400)
+
+        if not supported(name):
+            return self._json({
+                "error": f"I can't read '{Path(name).suffix or name}'. I handle PDF, "
+                         "Word, Excel, PowerPoint, CSV, JSON, text and source files."
+            }, 400)
+
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            return self._json({"error": "that file didn't arrive intact"}, 400)
+
+        if len(data) > chats.MAX_UPLOAD_BYTES:
+            limit = chats.MAX_UPLOAD_BYTES // (1024 * 1024)
+            return self._json({"error": f"that file is over the {limit} MB limit"}, 400)
+
+        chat = chats.load(chat_id) if chat_id else None
+        if chat is None:
+            chat = chats.create()
+
+        try:
+            text, note, truncated = extract(name, data)
+        except Unsupported as exc:
+            return self._json({"error": str(exc)}, 400)
+        except Exception as exc:
+            return self._json({"error": f"couldn't read it ({exc.__class__.__name__})"}, 400)
+
+        entry = chats.add_attachment(chat, name, note, text)
+        # The assistant holds attachment context, so rebuild it next turn.
+        self.state.forget(chat["id"])
+        return self._json({
+            "chat_id": chat["id"],
+            "attachment": entry,
+            "truncated": truncated,
+            "attachments": chat.get("attachments", []),
+        })
 
     def do_DELETE(self):
         path = urlparse(self.path).path
@@ -185,6 +280,15 @@ class Handler(BaseHTTPRequestHandler):
             chat["title"] = chats.auto_title(text)
 
         assistant = self.state.assistant_for(chat["id"])
+
+        # Attachments are given to the assistant once per turn as background
+        # context, so the model can answer questions about the files.
+        attached = chats.attachment_text(chat)
+        if attached:
+            assistant.set_attachments(
+                attached, [a["name"] for a in chat.get("attachments", [])]
+            )
+
         try:
             reply = assistant.respond(text)
         except Exception as exc:
@@ -199,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
             "chat_id": chat["id"],
             "title": chat["title"],
             "reply": reply,
+            "repo": chat.get("repo", ""),
+            "attachments": chat.get("attachments", []),
         })
 
 

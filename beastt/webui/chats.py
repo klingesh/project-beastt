@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 from typing import Dict, List, Optional
 
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024      # 20 MB per file
+
 from ..paths import data_dir
 
 
@@ -87,6 +89,71 @@ def append(chat: Dict, role: str, content: str) -> None:
     chat.setdefault("messages", []).append(
         {"role": role, "content": content, "at": time.time()}
     )
+
+
+# --- attachments ------------------------------------------------------------
+def uploads_dir(chat_id: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_-]", "", str(chat_id))[:40]
+    path = data_dir() / "uploads" / safe
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def add_attachment(chat: Dict, name: str, note: str, text: str) -> Dict:
+    """Store an attachment's extracted text and record it on the chat."""
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:80] or "file"
+    target = uploads_dir(chat["id"]) / f"{safe_name}.txt"
+    target.write_text(text, encoding="utf-8")
+
+    entry = {"name": name, "note": note, "chars": len(text), "stored": target.name}
+    attachments = chat.setdefault("attachments", [])
+    # Replace an earlier upload of the same file rather than duplicating it.
+    attachments[:] = [a for a in attachments if a.get("name") != name]
+    attachments.append(entry)
+    save(chat)
+    return entry
+
+
+def attachment_text(chat: Dict, budget: int = 9000) -> str:
+    """Concatenated attachment text for the model, newest first, within a budget."""
+    parts, used = [], 0
+    for entry in reversed(chat.get("attachments") or []):
+        path = uploads_dir(chat["id"]) / entry.get("stored", "")
+        if not path.exists():
+            continue
+        body = path.read_text(encoding="utf-8", errors="replace")
+        room = budget - used
+        if room <= 200:
+            break
+        if len(body) > room:
+            body = body[:room] + "\n[...truncated]"
+        parts.append(f"--- {entry['name']} ({entry.get('note', '')}) ---\n{body}")
+        used += len(body)
+    return "\n\n".join(reversed(parts))
+
+
+def remove_attachment(chat: Dict, name: str) -> bool:
+    attachments = chat.get("attachments") or []
+    remaining = [a for a in attachments if a.get("name") != name]
+    if len(remaining) == len(attachments):
+        return False
+    for entry in attachments:
+        if entry.get("name") == name:
+            path = uploads_dir(chat["id"]) / entry.get("stored", "")
+            if path.exists():
+                path.unlink()
+    chat["attachments"] = remaining
+    save(chat)
+    return True
+
+
+def set_repo(chat_id: str, repo: str) -> bool:
+    chat = load(chat_id)
+    if chat is None:
+        return False
+    chat["repo"] = " ".join(str(repo or "").split())[:120]
+    save(chat)
+    return True
 
 
 def auto_title(text: str) -> str:

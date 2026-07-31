@@ -33,7 +33,10 @@
     <main class="main">
       <header class="topbar">
         <button class="icon-btn" id="openSidebar" title="Show chats">&#9776;</button>
-        <h1 id="chatTitle">New chat</h1>
+        <h1 id="chatTitle" title="Click to rename">New chat</h1>
+        <button class="repo-pill" id="repoBtn" title="Link a GitHub repository">
+          <span id="repoLabel">Link repo</span>
+        </button>
         <button class="icon-btn danger" id="deleteChat" title="Delete this chat">🗑</button>
       </header>
 
@@ -51,13 +54,33 @@
         </div>
       </div>
 
+      <div class="attachments" id="attachments"></div>
+
       <form class="composer" id="composer">
+        <button type="button" class="attach-btn" id="attachBtn"
+                title="Attach a file (PDF, Word, Excel, PowerPoint, CSV, text)">📎</button>
+        <input type="file" id="fileInput" multiple hidden
+               accept=".pdf,.docx,.pptx,.xlsx,.xlsm,.csv,.json,.txt,.md,.py,.js,.ts,.html,.css,.yml,.yaml,.sql">
         <textarea id="input" rows="1" placeholder="Message JARVIS…"
                   autocomplete="off"></textarea>
         <button type="submit" id="send" title="Send">↑</button>
       </form>
       <p class="hint muted">Runs entirely on your machine. Enter to send, Shift+Enter for a new line.</p>
     </main>
+  </div>
+
+  <!-- Repository picker -->
+  <div class="modal hidden" id="repoModal">
+    <div class="modal-card">
+      <h3>Link a repository</h3>
+      <p class="muted">Documents and code in this chat will read from and push to it.</p>
+      <input type="text" id="repoFilter" placeholder="Filter…" autocomplete="off">
+      <div class="repo-list" id="repoList"></div>
+      <div class="modal-actions">
+        <button class="ghost" id="repoUnlink">Unlink</button>
+        <button class="ghost" id="repoCancel">Close</button>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>
