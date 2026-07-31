@@ -83,6 +83,113 @@ class Blocked(Exception):
     """Raised when a command is refused outright."""
 
 
+# --- shell built-ins --------------------------------------------------------
+# On Windows these are part of cmd.exe rather than programs on disk, so running
+# them without a shell fails with "not found". The common ones are implemented
+# directly in Python, which keeps them working without introducing a shell.
+def _is_flag(arg: str) -> bool:
+    """A switch rather than a path.
+
+    Unix flags start with '-'. Windows switches look like '/s' or '/q' -- a
+    single short token -- whereas '/tmp/evil' is an absolute path and must not be
+    mistaken for one, or it would be silently ignored instead of refused.
+    """
+    if arg.startswith("-"):
+        return True
+    # Only Windows uses slash switches, and they're one or two characters --
+    # anything longer (e.g. /etc) is a path and must be range-checked, not skipped.
+    return os.name == "nt" and bool(re.fullmatch(r"/[a-zA-Z?]{1,2}", arg))
+
+
+def _resolve_inside(cwd: Path, name: str) -> Path:
+    """Resolve a path and refuse anything outside the project folder."""
+    candidate = Path(name)
+    target = (candidate if candidate.is_absolute() else cwd / candidate).resolve()
+    root = cwd.resolve()
+    if target != root and root not in target.parents:
+        raise Blocked("a path outside the project folder")
+    return target
+
+
+def _bi_mkdir(args: List[str], cwd: Path) -> str:
+    paths = [a for a in args if not _is_flag(a)]
+    if not paths:
+        return "Which folder should I create?"
+    made = []
+    for name in paths:
+        target = _resolve_inside(cwd, name)
+        if target.exists():
+            made.append(f"{name} already exists")
+            continue
+        target.mkdir(parents=True, exist_ok=True)
+        made.append(f"created {name}")
+    return "\n".join(made) or "(nothing to do)"
+
+
+def _bi_list(args: List[str], cwd: Path) -> str:
+    targets = [a for a in args if not _is_flag(a)]
+    base = _resolve_inside(cwd, targets[0]) if targets else cwd
+    if not base.exists():
+        return f"'{base.name}' doesn't exist."
+    if base.is_file():
+        return f"{base.name}  ({base.stat().st_size} bytes)"
+    rows = []
+    for entry in sorted(base.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
+        if entry.is_dir():
+            rows.append(f"  <DIR>  {entry.name}")
+        else:
+            rows.append(f"  {entry.stat().st_size:>8}  {entry.name}")
+    return "\n".join(rows) or "(empty folder)"
+
+
+def _bi_pwd(args: List[str], cwd: Path) -> str:
+    return str(cwd)
+
+
+def _bi_echo(args: List[str], cwd: Path) -> str:
+    return " ".join(args)
+
+
+def _bi_read(args: List[str], cwd: Path) -> str:
+    names = [a for a in args if not _is_flag(a)]
+    if not names:
+        return "Which file should I read?"
+    target = _resolve_inside(cwd, names[0])
+    if not target.is_file():
+        return f"'{names[0]}' isn't a file I can read."
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return f"Couldn't read it ({exc})."
+    return text
+
+
+def _bi_cd(args: List[str], cwd: Path) -> str:
+    # Each command runs in its own process, so a directory change wouldn't
+    # persist. Say so rather than appearing to succeed.
+    return (
+        f"I always work from {cwd}. Give me a path in the command itself, "
+        "for example \"run ls beastt_workspace\"."
+    )
+
+
+_BUILTINS = {
+    "mkdir": _bi_mkdir, "md": _bi_mkdir,
+    "dir": _bi_list, "ls": _bi_list,
+    "pwd": _bi_pwd, "cwd": _bi_pwd,
+    "echo": _bi_echo,
+    "type": _bi_read, "cat": _bi_read,
+    "cd": _bi_cd, "chdir": _bi_cd,
+}
+
+# Other cmd.exe built-ins we can hand to `cmd /c`. Only reached after the safety
+# checks, and only when no shell metacharacters are present.
+_CMD_BUILTINS = {
+    "cls", "copy", "move", "ren", "rename", "ver", "vol", "date", "time",
+    "tree", "where", "set", "assoc", "ftype", "path",
+}
+
+
 def _tokens(command: str) -> List[str]:
     try:
         return shlex.split(command, posix=(os.name != "nt"))
@@ -129,6 +236,23 @@ def run(command: str, cwd: Optional[Path] = None) -> str:
 
     tokens = _tokens(command)
     workdir = Path(cwd) if cwd else project_root()
+    head = tokens[0].lower()
+
+    # Shell built-ins: handled in Python so they work without a shell.
+    handler = _BUILTINS.get(head)
+    if handler is not None:
+        output = handler(tokens[1:], workdir)
+        if len(output) > _MAX_OUTPUT:
+            output = output[:_MAX_OUTPUT] + "\n... (truncated)"
+        return output
+
+    # Remaining cmd.exe built-ins need cmd itself. Refuse if anything could be
+    # interpreted as a second command.
+    if os.name == "nt" and head in _CMD_BUILTINS:
+        if any(re.search(r"[;&|<>`$]", token) for token in tokens):
+            raise Blocked("shell metacharacters in a built-in command")
+        tokens = ["cmd", "/c", *tokens]
+
     try:
         completed = subprocess.run(
             tokens,
@@ -139,7 +263,10 @@ def run(command: str, cwd: Optional[Path] = None) -> str:
             shell=False,
         )
     except FileNotFoundError:
-        return f"I couldn't find '{tokens[0]}' on this system."
+        hint = ""
+        if os.name == "nt":
+            hint = " (if it's a cmd built-in, tell me and I'll add it)"
+        return f"I couldn't find '{tokens[0]}' on this system.{hint}"
     except subprocess.TimeoutExpired:
         return f"That took longer than {_TIMEOUT} seconds, so I stopped it."
     except Exception as exc:
