@@ -31,7 +31,12 @@ BRANCH = "feat/beastt-ai-companion"
 _UA = {"User-Agent": "beastt-selfupdate/1.0", "Accept": "*/*"}
 _SKIP_EXACT = {".env"}
 _SKIP_PREFIX = ("beastt_memory/", "beastt_output/", "beastt_workspace/", ".git/", "jarvis/")
-_KEEP_SUFFIX = (".py", ".txt", ".md", ".example", ".gitignore")
+#: Python, config, and the web interface's assets. The web types matter: without
+#: them an update leaves the chat interface with no page to serve.
+_KEEP_SUFFIX = (
+    ".py", ".txt", ".md", ".example", ".gitignore",
+    ".html", ".css", ".js", ".json", ".svg", ".ico",
+)
 
 VERSION_FILE = "version.json"
 

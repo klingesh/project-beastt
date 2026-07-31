@@ -89,8 +89,26 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self, name: str) -> None:
         # Serve only files that actually sit in the static folder.
         target = (STATIC / name).resolve()
-        if not str(target).startswith(str(STATIC.resolve())) or not target.is_file():
+        if not str(target).startswith(str(STATIC.resolve())):
             self._json({"error": "not found"}, 404)
+            return
+        if not target.is_file():
+            # A missing interface file is a setup problem, not a bad request --
+            # say so plainly instead of returning an opaque 404.
+            self._send(
+                503,
+                (
+                    "<!DOCTYPE html><html><body style=\"font-family:system-ui;"
+                    "background:#0b0f14;color:#e6edf5;padding:3rem;line-height:1.6\">"
+                    f"<h2>Interface file missing: {name}</h2>"
+                    "<p>The chat interface's files aren't on disk. Fetch them with:</p>"
+                    "<pre style=\"background:#111823;padding:1rem;border-radius:8px\">"
+                    "python update.py</pre>"
+                    f"<p style=\"color:#8899ab\">Expected in: {STATIC}</p>"
+                    "</body></html>"
+                ).encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
             return
         kind = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         self._send(200, target.read_bytes(), kind)
@@ -187,6 +205,16 @@ class Handler(BaseHTTPRequestHandler):
 def serve(config: Optional[Config] = None, port: int = 8765,
           open_browser: bool = True) -> None:
     config = config or Config.load()
+
+    # Fail loudly at startup rather than serving a broken page.
+    missing = [f for f in ("index.html", "app.js", "style.css")
+               if not (STATIC / f).is_file()]
+    if missing:
+        print(f"[ui] Missing interface file(s): {', '.join(missing)}")
+        print(f"[ui] Expected in {STATIC}")
+        print("[ui] Run `python update.py` to fetch them, then try again.")
+        return
+
     Handler.state = _State(config)
 
     # Localhost only: this interface has no authentication by design.

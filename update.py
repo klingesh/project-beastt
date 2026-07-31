@@ -45,13 +45,20 @@ def _get(url: str, as_json: bool = False):
     return json.loads(data) if as_json else data
 
 
+#: Everything that makes up the app: Python, config, and the web interface's
+#: assets. Omitting the web types once left the UI serving 404s.
+WANTED_SUFFIXES = (
+    ".py", ".txt", ".md", ".example", ".gitignore",
+    ".html", ".css", ".js", ".json", ".svg", ".ico",
+)
+
+
 def _wanted(path: str) -> bool:
     if path in SKIP_EXACT:
         return False
     if any(path.startswith(p) for p in SKIP_PREFIX):
         return False
-    # Everything else that's source or config.
-    return path.endswith((".py", ".txt", ".md", ".example", ".gitignore"))
+    return path.endswith(WANTED_SUFFIXES)
 
 
 def list_files(branch: str) -> list:
