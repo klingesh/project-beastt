@@ -71,11 +71,14 @@ class Config:
 
     # Documents (PowerPoint / Word / Excel generation)
     documents_enabled: bool = _get("BEASTT_DOCUMENTS", "on").lower() in ("on", "true", "1", "yes")
+    doc_theme: str = _get("BEASTT_DOC_THEME", "navy")   # navy | slate | plum | ember
 
     # GitHub access (push generated files, browse repos)
     github_token: str = _get("BEASTT_GITHUB_TOKEN", "")
     github_repo: str = _get("BEASTT_GITHUB_REPO", "")        # default push target
     github_folder: str = _get("BEASTT_GITHUB_FOLDER", "jarvis")
+    # Ask which repo to push to instead of silently using the default.
+    github_ask: bool = _get("BEASTT_GITHUB_ASK", "on").lower() in ("on", "true", "1", "yes")
 
     # Web search
     search_enabled: bool = _get("BEASTT_SEARCH", "on").lower() in ("on", "true", "1", "yes")

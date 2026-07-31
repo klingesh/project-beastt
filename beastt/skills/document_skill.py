@@ -84,6 +84,7 @@ class DocumentSkill(Skill):
         return bool(_TRIGGER.search(text))
 
     def run(self, text: str) -> str:
+        from ..config import Config
         from ..docgen import plan
         from ..documents import MissingLibrary, build
 
@@ -103,7 +104,7 @@ class DocumentSkill(Skill):
             )
 
         try:
-            path = build(kind, spec)
+            path = build(kind, spec, theme_name=Config.load().doc_theme)
         except MissingLibrary as exc:
             return str(exc)
         except Exception as exc:

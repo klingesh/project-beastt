@@ -130,6 +130,15 @@ Files land in `beastt_output/`. The local model writes the *content* as JSON and
 the renderer handles all layout, so a weak model can only produce a thin
 document -- never a corrupt one.
 
+Presentations are composed slide by slide rather than using stock Office
+layouts: 16:9, a full-bleed title slide, an auto-generated agenda, coloured
+header bands with an accent rule, bullets that split into two columns when
+there are enough of them, a key-takeaway panel per slide, footers with slide
+numbers, and a closing slide.
+
+Pick a palette with `BEASTT_DOC_THEME`: `navy` (default), `slate`, `plum`, or
+`ember`.
+
 | Ask for | You get |
 |---------|---------|
 | ppt, powerpoint, presentation, slides, deck | `.pptx` with title slide, bullets, speaker notes |
@@ -141,11 +150,17 @@ document -- never a corrupt one.
 The assistant can push what it creates straight to your repositories:
 
 ```
-"push it to github"
-"upload it to my notes repo"
+"push it to github"           -> asks which repo, then uploads
+"upload it to my notes repo"  -> pushes straight there
 "list my repos"
 "what files are in project-beastt"
 ```
+
+When you say "push it to github" without naming a repo, it lists your
+repositories and waits for you to pick -- by name ("notes"), by number ("3"), or
+by position ("the second one"). Say "default" to use `BEASTT_GITHUB_REPO`, or
+"cancel" to back out. Set `BEASTT_GITHUB_ASK=off` to skip the question and
+always use the default repo.
 
 Set it up with a [personal access token](https://github.com/settings/tokens)
 (scope: `repo`) in your `.env`:
@@ -175,6 +190,8 @@ Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 | Web search | `BEASTT_SEARCH` | `on` |
 | Documents | `BEASTT_DOCUMENTS` | `on` |
 | GitHub token | `BEASTT_GITHUB_TOKEN` | (unset) |
+| Ask which repo | `BEASTT_GITHUB_ASK` | `on` |
+| Document palette | `BEASTT_DOC_THEME` | `navy` |
 | Voice lock (advanced) | `BEASTT_MY_VOICE_ONLY` | `off` |
 | Voice-lead margin | `BEASTT_SPEAKER_MARGIN` | `0.04` |
 

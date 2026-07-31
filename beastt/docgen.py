@@ -16,10 +16,14 @@ from .brain.base import Brain, Message
 _SCHEMAS = {
     "presentation": """{
   "title": "short deck title",
-  "subtitle": "one-line subtitle",
+  "subtitle": "one-line value proposition",
   "slides": [
-    {"title": "slide title", "bullets": ["short bullet", "short bullet"], "notes": "speaker notes"}
-  ]
+    {"title": "slide title",
+     "bullets": ["short bullet", "short bullet"],
+     "key_message": "the single takeaway from this slide",
+     "notes": "speaker notes"}
+  ],
+  "closing": "closing line, e.g. Thank you"
 }""",
     "document": """{
   "title": "document title",
@@ -37,7 +41,12 @@ _SCHEMAS = {
 }
 
 _GUIDANCE = {
-    "presentation": "Aim for 6-9 slides. Each slide: 3-5 short bullets (max ~12 words each).",
+    "presentation": (
+        "Aim for 6-9 slides that tell a clear story: context, then substance, then "
+        "implications. Each slide needs 3-5 punchy bullets (max ~12 words each), a "
+        "one-sentence key_message, and useful speaker notes. Include concrete "
+        "figures, dates, or examples where you can. Avoid generic filler."
+    ),
     "document": "Aim for 4-6 sections with substantive paragraphs (2-4 sentences each).",
     "spreadsheet": "Design sensible columns and 8-15 realistic example rows. Numbers as numbers.",
 }
@@ -99,11 +108,14 @@ def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
             slides.append(
                 {
                     "title": _clean(item.get("title") or "")[:120],
-                    "bullets": bullets[:6],
+                    "bullets": bullets[:8],
+                    "key_message": _clean(item.get("key_message") or "")[:180] or None,
                     "notes": _clean(item.get("notes") or "")[:600] or None,
                 }
             )
         out["slides"] = slides
+        if spec.get("closing"):
+            out["closing"] = _clean(spec["closing"])[:80]
     elif kind == "document":
         sections = []
         for item in spec.get("sections") or []:
