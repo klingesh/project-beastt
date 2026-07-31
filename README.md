@@ -7,7 +7,7 @@ JARVIS is a voice **and** text AI assistant that runs on a **free, local** langu
 ## ✨ Features
 
 - 🧠 **Local brain** — runs a free model (`llama3.2` by default) on your own machine. No API keys, no cloud.
-- 💬 **Text & voice** — type to it, or talk out loud and hear it reply.
+- 💬 **Text, voice, or a browser chat UI** — type, talk, or open a proper chat window.
 - ❤️ **A real friend** — warm, witty personality that greets you and holds a genuine conversation.
 - 🌐 **Live web search** — asks about news, weather, or current events get real answers, summarized in its own voice.
 - 🎯 **Noise-robust listening** — ignores coughs, sips, and background clatter; reacts to actual speech.
@@ -384,6 +384,30 @@ text, and summarised by the local model.
 
 Long documents are truncated before reaching the model, since a 200-page PDF
 would otherwise exceed its context window.
+
+## 💬 Chat interface
+
+```bash
+python main.py --ui
+```
+
+Opens a browser chat at `http://127.0.0.1:8765` — separate conversations in a
+sidebar, full history, the lot. Everything the assistant can do works here:
+documents, code, reading files, health checks.
+
+- **Multiple chats.** Each conversation keeps its own context and any open
+  document session; long-term memory is shared across all of them.
+- **History is saved** to `beastt_memory/chats/`, so threads survive a restart —
+  the assistant's context is rebuilt from the transcript when you reopen one.
+- Chats are titled automatically from your first message, and can be renamed or
+  deleted.
+- Built on Python's standard library, so there's nothing extra to install.
+
+Useful flags: `--port 9000` to change the address, `--no-browser` to start
+without opening a window.
+
+The interface listens on localhost only and has no authentication, so keep it to
+your own machine. Note that if `BEASTT_SHELL=on`, commands can be run from here too.
 
 ## ⚙️ Configuration
 

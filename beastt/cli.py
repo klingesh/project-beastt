@@ -46,6 +46,19 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="Force text-only chat, even if voice is enabled in .env.",
     )
     p.add_argument(
+        "--ui",
+        action="store_true",
+        help="Open the chat interface in your browser (multiple conversations).",
+    )
+    p.add_argument(
+        "--port", type=int, default=8765, help="Port for the chat interface."
+    )
+    p.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Start the interface but don't open a browser window.",
+    )
+    p.add_argument(
         "--wake",
         action="store_true",
         help="Standby mode: idle until you call 'BEASTT', then choose voice or text.",
@@ -464,6 +477,13 @@ def run(argv=None) -> None:
 
     if verbose:
         print(_banner(config.name))
+
+    # Web chat interface: manages one conversation per thread itself.
+    if args.ui:
+        from .webui import serve
+
+        serve(config, port=args.port, open_browser=not args.no_browser)
+        return
 
     # Standby mode manages its own assistants per conversation.
     if args.wake:
