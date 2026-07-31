@@ -79,14 +79,47 @@ class DocumentSkill(Skill):
         self._brain_provider = brain_provider
         self._on_created = on_created
         self.last_path = None
+        # Holds the document currently being worked on, so follow-up
+        # instructions revise it instead of starting from scratch.
+        from ..workshop import Workshop
+
+        self.workshop = Workshop()
 
     def matches(self, text: str) -> bool:
-        return bool(_TRIGGER.search(text))
+        if _TRIGGER.search(text):
+            return True
+        # While a document is open, claim instruction-shaped follow-ups.
+        return self.workshop.looks_like_revision(text)
 
     def run(self, text: str) -> str:
+        # An open document takes priority: "add a slide about costs" should edit
+        # what we just made rather than trigger a brand-new file.
+        if self.workshop.active and not _TRIGGER.search(text):
+            if self.workshop.is_done(text):
+                path = self.workshop.path
+                revisions = self.workshop.revisions
+                self.workshop.close()
+                tail = f" after {revisions} revision{'s' if revisions != 1 else ''}" if revisions else ""
+                return (
+                    f"Great -- finished{tail}. It's saved at:\n{path}\n"
+                    "Say \"push it to GitHub\" whenever you want it uploaded."
+                )
+            reply = self.workshop.revise(self._brain_provider(), text)
+            if self.workshop.path:
+                self.last_path = self.workshop.path
+                if self._on_created:
+                    try:
+                        self._on_created(self.workshop.path)
+                    except Exception:
+                        pass
+            return reply
+
+        return self._create(text)
+
+    def _create(self, text: str) -> str:
         from ..config import Config
         from ..docgen import plan
-        from ..documents import MissingLibrary, build
+        from ..documents import MissingLibrary, _resolve_theme, build
 
         kind = detect_kind(text)
         topic = extract_topic(text)
@@ -103,8 +136,9 @@ class DocumentSkill(Skill):
                 "Try describing the topic a bit more specifically?"
             )
 
+        theme = _resolve_theme(spec, Config.load().doc_theme)
         try:
-            path = build(kind, spec, theme_name=Config.load().doc_theme)
+            path = build(kind, spec, theme_name=theme)
         except MissingLibrary as exc:
             return str(exc)
         except Exception as exc:
@@ -117,17 +151,18 @@ class DocumentSkill(Skill):
             except Exception:
                 pass
 
-        # Mention size so the user knows how substantial it is.
-        if kind == "presentation":
-            detail = f"{len(spec.get('slides', []))} slides"
-        elif kind == "document":
-            detail = f"{len(spec.get('sections', []))} sections"
-        else:
-            sheets = spec.get("sheets") or [{}]
-            detail = f"{len(sheets[0].get('rows', []))} rows"
+        # Open a working session so the next message can refine this document.
+        self.workshop.start(kind, topic, spec, theme, path)
 
+        from ..theme import describe
+
+        design_note = describe(theme)
         return (
-            f"Done! I've made a {label} on {topic} ({detail}).\n"
-            f"Saved to: {path}\n"
-            "Say \"push it to GitHub\" if you'd like me to upload it."
+            f"Here's a first draft of your {label} on {topic}.\n"
+            f"{self.workshop.outline()}\n"
+            f"Design: {design_note}\n"
+            f"Saved to: {path}\n\n"
+            "Tell me what to change -- for example \"add a slide about costs\", "
+            "\"make the bullets shorter\", or \"use a warmer colour\". "
+            "Say \"that's it\" when you're happy, or \"push it to GitHub\"."
         )

@@ -136,8 +136,8 @@ header bands with an accent rule, bullets that split into two columns when
 there are enough of them, a key-takeaway panel per slide, footers with slide
 numbers, and a closing slide.
 
-Pick a palette with `BEASTT_DOC_THEME`: `navy` (default), `slate`, `plum`, or
-`ember`.
+`BEASTT_DOC_THEME` sets the fallback palette (`navy`, `slate`, `plum`, `ember`)
+for when the model doesn't choose one.
 
 | Ask for | You get |
 |---------|---------|
@@ -174,6 +174,41 @@ BEASTT_GITHUB_FOLDER=jarvis        # folder inside the repo
 Deliberately conservative: it only creates or updates single files inside the
 configured folder. It never deletes, rewrites history, or force-pushes. Keep
 `.env` out of version control -- it's already in `.gitignore`.
+
+## 🤝 Working on a document together
+
+Creating a document opens a working session. The first reply is a *draft* with an
+outline, and you refine it conversationally:
+
+```
+You:    make a ppt about renewable energy in india
+JARVIS: Here's a first draft of your PowerPoint presentation...
+          1. Where We Stand  (3 bullets)
+          2. Economics       (4 bullets)
+          3. Challenges      (3 bullets)
+        Design: #14532D / #4ADE80 -- greens suit an environmental topic
+
+You:    add a slide about costs
+You:    make the bullets shorter
+You:    use a warmer colour
+You:    actually use #6B21A8
+You:    remove the challenges slide
+You:    that's perfect
+```
+
+Each instruction edits *that* document and re-renders it. Say "that's it",
+"done", or "perfect" to close the session -- or "push it to GitHub" to upload.
+
+**JARVIS chooses the design.** It picks a palette to suit the subject (greens for
+environmental topics, navy for finance, plum for creative work) and explains why.
+You can override it any time with a colour word ("make it teal", "something
+warmer"), a built-in palette name, or an exact hex code.
+
+Colour changes are applied directly without involving the model, so they're
+always exact. Text colour is computed from the background's luminance, so even a
+pale AI-chosen colour stays readable. Content edits go to the model, and if its
+reply is unusable the previous version is kept -- an edit can do nothing, but it
+can't corrupt your document.
 
 ## ⚙️ Configuration
 

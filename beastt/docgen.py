@@ -15,6 +15,7 @@ from .brain.base import Brain, Message
 
 _SCHEMAS = {
     "presentation": """{
+  "design": {"palette": "navy|slate|plum|ember|custom", "primary": "0B2545", "accent": "3DA5D9", "rationale": "why this suits the topic"},
   "title": "short deck title",
   "subtitle": "one-line value proposition",
   "slides": [
@@ -26,6 +27,7 @@ _SCHEMAS = {
   "closing": "closing line, e.g. Thank you"
 }""",
     "document": """{
+  "design": {"palette": "navy|slate|plum|ember|custom", "primary": "0B2545", "accent": "3DA5D9", "rationale": "why this suits the topic"},
   "title": "document title",
   "subtitle": "one-line summary",
   "sections": [
@@ -33,6 +35,7 @@ _SCHEMAS = {
   ]
 }""",
     "spreadsheet": """{
+  "design": {"palette": "navy|slate|plum|ember|custom", "primary": "0B2545", "accent": "3DA5D9", "rationale": "why this suits the topic"},
   "title": "workbook title",
   "sheets": [
     {"name": "Sheet name", "columns": ["Column A", "Column B"], "rows": [["value", 123]]}
@@ -60,6 +63,11 @@ Rules:
 - {guidance}
 - Be specific and useful -- real facts and concrete detail, not placeholders.
 - Keep all strings plain text: no markdown, asterisks, or newline characters.
+- Choose a "design" that fits the subject: pick one of the named palettes, or set
+  "palette": "custom" with your own dark "primary" and bright "accent" hex colours
+  (no '#'). Corporate/finance suits navy or slate; nature and health suit greens;
+  creative and cultural topics suit plum; energy and food suit ember. Keep
+  "primary" dark enough for white text to be readable on it.
 """
 
 
@@ -96,6 +104,8 @@ def _clean(value) -> str:
 def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
     """Coerce the model's output into exactly what the renderers expect."""
     out: Dict = {"title": _clean(spec.get("title") or topic)[:120]}
+    if isinstance(spec.get("design"), dict):
+        out["design"] = spec["design"]
     if spec.get("subtitle"):
         out["subtitle"] = _clean(spec["subtitle"])[:200]
 
@@ -156,6 +166,52 @@ def _is_thin(kind: str, spec: Dict) -> bool:
         return len(spec.get("sections") or []) < 2
     sheets = spec.get("sheets") or []
     return not sheets or not (sheets[0].get("rows"))
+
+
+_REVISE_PROMPT = """You are editing an existing {kind} about "{topic}".
+
+Here is its current content as JSON:
+{current}
+
+The user asks for this change:
+"{instruction}"
+
+Apply ONLY that change, keeping everything else exactly as it is. Return the
+COMPLETE updated JSON in the same shape -- no markdown, no commentary.
+"""
+
+
+def revise(
+    brain: Brain, kind: str, spec: Dict, instruction: str, topic: str = "",
+    attempts: int = 2,
+) -> Optional[Dict]:
+    """Apply a natural-language edit to an existing spec.
+
+    Returns the updated spec, or None if the model's reply can't be used -- in
+    which case the caller keeps the previous version.
+    """
+    if kind not in _SCHEMAS:
+        return None
+    current = json.dumps(spec, ensure_ascii=False, indent=1)[:6000]
+    prompt = _REVISE_PROMPT.format(
+        kind=kind, topic=topic or spec.get("title", ""), current=current,
+        instruction=instruction.strip(),
+    )
+    for _ in range(attempts):
+        try:
+            raw = brain.reply([Message(role="user", content=prompt)])
+        except Exception:
+            return None
+        data = _extract_json(raw)
+        if data:
+            updated = _normalise(kind, data, topic or spec.get("title", ""))
+            if not _is_thin(kind, updated):
+                # Preserve a design the model chose earlier unless it sent a new one.
+                if spec.get("design") and not updated.get("design"):
+                    updated["design"] = spec["design"]
+                return updated
+        prompt += "\n\nYour previous reply was not valid JSON. Return ONLY the complete JSON."
+    return None
 
 
 def plan(brain: Brain, kind: str, topic: str, attempts: int = 2) -> Optional[Dict]:

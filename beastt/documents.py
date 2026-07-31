@@ -36,6 +36,18 @@ class MissingLibrary(RuntimeError):
     pass
 
 
+def _resolve_theme(spec: Dict, theme_name):
+    """Pick the theme: a Theme instance, the model's design spec, or a palette name."""
+    from .theme import Theme, from_design, get
+
+    if isinstance(theme_name, Theme):
+        return theme_name
+    design = spec.get("design") if isinstance(spec, dict) else None
+    if design:
+        return from_design(design, fallback_name=str(theme_name or "navy"))
+    return get(str(theme_name or "navy"))
+
+
 # --- PowerPoint -------------------------------------------------------------
 def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
     """Render a designed 16:9 slide deck.
@@ -56,11 +68,11 @@ def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
             f"PowerPoint support needs python-pptx ({exc}). Run: pip install python-pptx"
         )
 
-    from .theme import get as get_theme
-
-    th = get_theme(theme_name)
+    th = _resolve_theme(spec, theme_name)
     title = spec.get("title") or "Presentation"
     subtitle = spec.get("subtitle") or datetime.now().strftime("%B %d, %Y")
+
+    on_primary = th.on_primary()   # legible on the title/header colour
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)   # 16:9 widescreen
@@ -101,12 +113,12 @@ def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
     rect(slide, Inches(0.9), Inches(2.55), Inches(1.6), Pt(6), th.accent)
 
     frame = textbox(slide, Inches(0.9), Inches(2.8), SW - Inches(2.4), Inches(2.2))
-    write(frame, title, th.title_size, th.white, bold=True, font=th.heading_font, first=True)
+    write(frame, title, th.title_size, on_primary, bold=True, font=th.heading_font, first=True)
     write(frame, subtitle, th.subtitle_size, th.accent, space_after=0)
 
     frame = textbox(slide, Inches(0.9), SH - Inches(1.0), SW - Inches(2), Inches(0.4))
     write(frame, datetime.now().strftime("%B %d, %Y"), th.caption_size,
-          th.light, first=True)
+          on_primary, first=True)
 
     slides = [s for s in spec.get("slides", []) if isinstance(s, dict)]
 
@@ -117,7 +129,7 @@ def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
         slide = prs.slides.add_slide(BLANK)
         rect(slide, 0, 0, SW, Inches(1.15), th.primary)
         frame = textbox(slide, Inches(0.7), Inches(0.25), SW - Inches(1.4), Inches(0.7))
-        write(frame, "Agenda", th.slide_title_size, th.white, bold=True,
+        write(frame, "Agenda", th.slide_title_size, on_primary, bold=True,
               font=th.heading_font, first=True)
 
         frame = textbox(slide, Inches(0.9), Inches(1.7), SW - Inches(1.8), SH - Inches(2.6))
@@ -136,7 +148,7 @@ def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
         rect(slide, 0, Inches(1.15), SW, Pt(4), th.accent)
 
         frame = textbox(slide, Inches(0.7), Inches(0.22), SW - Inches(1.4), Inches(0.8))
-        write(frame, str(item.get("title") or ""), th.slide_title_size, th.white,
+        write(frame, str(item.get("title") or ""), th.slide_title_size, on_primary,
               bold=True, font=th.heading_font, first=True)
 
         bullets = [str(b).strip() for b in (item.get("bullets") or []) if str(b).strip()]
@@ -191,7 +203,7 @@ def build_presentation(spec: Dict, theme_name: str = "navy") -> Path:
     rect(slide, 0, 0, SW, SH, th.primary)
     rect(slide, Inches(0.9), Inches(3.15), Inches(1.6), Pt(6), th.accent)
     frame = textbox(slide, Inches(0.9), Inches(3.4), SW - Inches(2), Inches(1.2))
-    write(frame, spec.get("closing") or "Thank you", 36, th.white, bold=True,
+    write(frame, spec.get("closing") or "Thank you", 36, on_primary, bold=True,
           font=th.heading_font, first=True)
 
     path = _safe_name(title, ".pptx")
@@ -217,9 +229,7 @@ def build_document(spec: Dict, theme_name: str = "navy") -> Path:
             f"Word support needs python-docx ({exc}). Run: pip install python-docx"
         )
 
-    from .theme import get as get_theme
-
-    th = get_theme(theme_name)
+    th = _resolve_theme(spec, theme_name)
     title = spec.get("title") or "Document"
     subtitle = spec.get("subtitle") or ""
 
@@ -323,16 +333,14 @@ def build_spreadsheet(spec: Dict, theme_name: str = "navy") -> Path:
             f"Excel support needs openpyxl ({exc}). Run: pip install openpyxl"
         )
 
-    from .theme import get as get_theme
-
-    th = get_theme(theme_name)
+    th = _resolve_theme(spec, theme_name)
     title = spec.get("title") or "Workbook"
     wb = Workbook()
     sheets = spec.get("sheets") or [{"name": "Sheet1", "columns": [], "rows": []}]
 
     header_fill = PatternFill("solid", fgColor=th.primary)
     band_fill = PatternFill("solid", fgColor=th.light)
-    header_font = Font(bold=True, color=th.white, name=th.body_font, size=11)
+    header_font = Font(bold=True, color=th.on_primary(), name=th.body_font, size=11)
     body_font = Font(name=th.body_font, size=11)
     thin = Side(style="thin", color="D6DEE7")
     border = Border(bottom=thin)
