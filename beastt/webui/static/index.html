@@ -37,6 +37,9 @@
       <header class="topbar">
         <button class="icon-btn" id="openSidebar" title="Show chats">&#9776;</button>
         <h1 id="chatTitle" title="Click to rename">New chat</h1>
+        <button class="model-pill" id="modelBtn" title="Switch the model for this chat">
+          <span id="modelLabel">Model</span>
+        </button>
         <button class="repo-pill" id="repoBtn" title="Link a GitHub repository">
           <span id="repoLabel">Link repo</span>
         </button>
@@ -86,6 +89,26 @@
       <div class="modal-actions">
         <button class="ghost" id="repoUnlink">Unlink</button>
         <button class="ghost" id="repoCancel">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Model picker -->
+  <div class="modal hidden" id="modelModal">
+    <div class="modal-card wide">
+      <h3>Choose a model</h3>
+      <p class="muted">
+        Applies to this conversation only. <strong>Local</strong> models never
+        leave this machine; <strong>cloud</strong> models send your messages to
+        that provider.
+      </p>
+      <input type="text" id="modelFilter" placeholder="Filter models…" autocomplete="off">
+      <div class="model-list" id="modelList"></div>
+      <div class="provider-help" id="providerHelp"></div>
+      <div class="modal-actions">
+        <button class="ghost" id="modelRefresh">Refresh</button>
+        <button class="ghost" id="modelDefault">Use default</button>
+        <button class="ghost" id="modelCancel">Close</button>
       </div>
     </div>
   </div>

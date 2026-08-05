@@ -21,10 +21,10 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
+from .. import providers
 from ..assistant import Assistant
-from ..brain.ollama_brain import OllamaBrain
 from ..config import Config
 from . import chats
 
@@ -42,7 +42,7 @@ class _State:
         self._brain_status: Optional[Dict] = None
 
     def brain_status(self, max_age: float = 20.0) -> Dict:
-        """Whether the real model is reachable, cached for a few seconds.
+        """Whether the default model is reachable, cached for a few seconds.
 
         The interface shows this so a fallback-mode session is obvious, instead
         of looking like a model that has mysteriously become terse. Cached
@@ -52,22 +52,49 @@ class _State:
         if self._brain_status is not None and now - self._brain_checked < max_age:
             return self._brain_status
 
-        probe = OllamaBrain(model=self.config.model, base_url=self.config.ollama_url)
-        if probe.is_available():
-            status = {"ready": True, "detail": f"{self.config.model} · local"}
-        elif probe.server_running():
+        model_id = providers.default_model_id(self.config)
+        provider_id, model = providers.split_model_id(model_id)
+        provider = providers.get(provider_id)
+        label = providers.describe(model_id)
+
+        if provider is None:
+            status = {"ready": False, "detail": f"Unknown model '{model_id}'",
+                      "fix": "check BEASTT_DEFAULT_MODEL in your .env"}
+        elif not providers.is_configured(self.config, provider):
             status = {
                 "ready": False,
-                "detail": f"Ollama is running, but '{self.config.model}' isn't installed",
-                "fix": f"ollama pull {self.config.model}",
+                "detail": f"No API key for {provider.label}",
+                "fix": f"add {provider.env_var} to your .env",
             }
         else:
-            status = {
-                "ready": False,
-                "detail": "Ollama isn't running — replies will be very basic",
-                "fix": "start Ollama, then reload this page",
-            }
+            brain = providers.build(self.config, model_id)
+            if brain is not None and brain.is_available():
+                status = {"ready": True, "detail": label}
+            elif provider.is_local:
+                # Distinguish "Ollama is off" from "the model isn't pulled" --
+                # the fixes are completely different.
+                running = getattr(brain, "server_running", lambda: False)()
+                if running:
+                    status = {
+                        "ready": False,
+                        "detail": f"Ollama is running, but '{model}' isn't installed",
+                        "fix": f"ollama pull {model}",
+                    }
+                else:
+                    status = {
+                        "ready": False,
+                        "detail": "Ollama isn't running — replies will be very basic",
+                        "fix": "start Ollama, then reload this page",
+                    }
+            else:
+                status = {
+                    "ready": False,
+                    "detail": f"{provider.label} didn't answer",
+                    "fix": f"check {provider.env_var} in your .env is valid",
+                }
 
+        status["model"] = model_id
+        status["label"] = label
         self._brain_checked, self._brain_status = now, status
         return status
 
@@ -75,17 +102,22 @@ class _State:
         with self._lock:
             found = self._assistants.get(chat_id)
             if found is None:
+                chat = chats.load(chat_id) or {}
                 chat_config = self.config
                 # A chat linked to a repository uses it as the default target,
                 # so pushes and reads in this thread go to the right place.
-                linked = (chats.load(chat_id) or {}).get("repo")
+                linked = chat.get("repo")
                 if linked:
                     chat_config = replace(self.config, github_repo=linked)
-                found = Assistant(config=chat_config, verbose=False)
+                found = Assistant(
+                    config=chat_config,
+                    verbose=False,
+                    # A chat remembers its own model; empty falls back to the default.
+                    model_id=chat.get("model") or None,
+                )
                 # Replay the transcript so the thread keeps its context after a
                 # page reload or a server restart.
-                chat = chats.load(chat_id)
-                for message in (chat or {}).get("messages", [])[-20:]:
+                for message in chat.get("messages", [])[-20:]:
                     if message["role"] == "user":
                         found.memory.add_user(message["content"])
                     else:
@@ -171,11 +203,15 @@ class Handler(BaseHTTPRequestHandler):
                 "name": config.name,
                 "user": config.user_name,
                 "model": config.model,
+                "default_model": providers.default_model_id(config),
                 "brain": self.state.brain_status(),
             })
 
         if path == "/api/chats":
             return self._json({"chats": chats.listing()})
+
+        if path == "/api/models":
+            return self._models()
 
         if path == "/api/repos":
             return self._repos()
@@ -214,6 +250,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.state.forget(chat_id)
                 return self._json({"ok": ok}, 200 if ok else 404)
 
+            if path.endswith("/model"):
+                return self._set_model(chat_id, body)
+
             if path.endswith("/detach"):
                 chat = chats.load(chat_id)
                 if chat is None:
@@ -222,6 +261,46 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": ok, "attachments": chat.get("attachments", [])})
 
         return self._json({"error": "not found"}, 404)
+
+    # --- models -----------------------------------------------------------
+    def _models(self):
+        """Everything the model picker needs, including providers still to set up."""
+        refresh = "refresh" in parse_qs(urlparse(self.path).query)
+        try:
+            data = providers.catalogue(self.state.config, force=refresh)
+        except Exception as exc:
+            data = {"models": [], "providers": [], "error": str(exc)[:160]}
+        data["default"] = providers.default_model_id(self.state.config)
+        return self._json(data)
+
+    def _set_model(self, chat_id: str, body: dict):
+        """Point one conversation at a different model."""
+        if chats.load(chat_id) is None:
+            return self._json({"error": "no such chat"}, 404)
+
+        wanted = str(body.get("model") or "").strip()
+        if not wanted:
+            # Clearing sends this chat back to the configured default.
+            chats.set_model(chat_id, "")
+            self.state.forget(chat_id)
+            default = providers.default_model_id(self.state.config)
+            return self._json({
+                "ok": True, "model": "", "label": providers.describe(default),
+            })
+
+        assistant = self.state.assistant_for(chat_id)
+        problem = assistant.set_model(wanted)
+        if problem:
+            # Never record a model the assistant couldn't actually reach --
+            # otherwise every following turn in this chat would fail.
+            return self._json({"error": problem}, 400)
+
+        chats.set_model(chat_id, assistant.model_id)
+        return self._json({
+            "ok": True,
+            "model": assistant.model_id,
+            "label": assistant.model_label(),
+        })
 
     # --- repositories -----------------------------------------------------
     def _repos(self):
@@ -338,6 +417,8 @@ class Handler(BaseHTTPRequestHandler):
             "title": chat["title"],
             "reply": reply,
             "repo": chat.get("repo", ""),
+            "model": assistant.model_id,
+            "model_label": assistant.model_label(),
             "attachments": chat.get("attachments", []),
         })
 

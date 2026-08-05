@@ -166,6 +166,21 @@ def set_repo(chat_id: str, repo: str) -> bool:
     return True
 
 
+def set_model(chat_id: str, model_id: str) -> bool:
+    """Remember which model this conversation thinks with.
+
+    Stored per chat, like the linked repo, so one thread can stay on the local
+    model while another uses a faster hosted one. An empty value means "use
+    whatever the configured default is".
+    """
+    chat = load(chat_id)
+    if chat is None:
+        return False
+    chat["model"] = " ".join(str(model_id or "").split())[:120]
+    save(chat)
+    return True
+
+
 def auto_title(text: str) -> str:
     """A short title derived from the first thing the user said."""
     cleaned = " ".join(str(text or "").split())
