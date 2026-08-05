@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -25,10 +26,13 @@ def chats_dir() -> Path:
     return path
 
 
+def _safe_id(chat_id: str) -> str:
+    """Ids are generated here, but never trust one arriving from a request."""
+    return re.sub(r"[^A-Za-z0-9_-]", "", str(chat_id))[:40]
+
+
 def _path(chat_id: str) -> Path:
-    # Ids are generated here, but never trust one arriving from a request.
-    safe = re.sub(r"[^A-Za-z0-9_-]", "", str(chat_id))[:40]
-    return chats_dir() / f"{safe}.json"
+    return chats_dir() / f"{_safe_id(chat_id)}.json"
 
 
 def create(title: str = "New chat") -> Dict:
@@ -61,11 +65,18 @@ def load(chat_id: str) -> Optional[Dict]:
 
 
 def delete(chat_id: str) -> bool:
+    """Remove a chat and everything stored alongside it."""
     path = _path(chat_id)
-    if path.exists():
+    existed = path.exists()
+    if existed:
         path.unlink()
-        return True
-    return False
+
+    # Attachment text lives in its own folder. Without this it would linger on
+    # disk long after the conversation it belonged to was deleted.
+    safe = _safe_id(chat_id)
+    if safe:
+        shutil.rmtree(data_dir() / "uploads" / safe, ignore_errors=True)
+    return existed
 
 
 def listing() -> List[Dict]:
@@ -93,8 +104,7 @@ def append(chat: Dict, role: str, content: str) -> None:
 
 # --- attachments ------------------------------------------------------------
 def uploads_dir(chat_id: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_-]", "", str(chat_id))[:40]
-    path = data_dir() / "uploads" / safe
+    path = data_dir() / "uploads" / _safe_id(chat_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
 

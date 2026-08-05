@@ -151,19 +151,97 @@ html, body {
 .hint { max-width: 760px; margin: 6px auto 12px; padding: 0 16px; font-size: 11.5px; text-align: center; }
 .muted { color: var(--muted); }
 
-/* ---------- chat rows: rename affordance ---------- */
+/* ---------- chat search ---------- */
+.chat-search {
+  margin: 0 12px 10px; width: calc(100% - 24px);
+  background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 9px;
+  padding: 7px 10px; font: inherit; font-size: 13px; outline: none;
+}
+.chat-search::placeholder { color: var(--muted); }
+.chat-search:focus { border-color: var(--accent-dim); }
+.chat-search.hidden { display: none; }
+
+/* ---------- chat list: date headings ---------- */
+.list-group {
+  padding: 13px 11px 5px; font-size: 10.5px; font-weight: 600;
+  letter-spacing: .07em; text-transform: uppercase;
+  color: var(--muted); opacity: .65;
+}
+.list-group:first-child { padding-top: 3px; }
+.list-note { padding: 9px 11px; font-size: 13px; }
+
+/* ---------- chat rows: rename and delete ---------- */
 .chat-item { display: flex; align-items: center; gap: 6px; }
 .ci-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ci-edit {
-  flex: 0 0 auto; visibility: hidden;
-  background: transparent; border: none; color: var(--muted);
-  cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 5px;
+
+/* Opacity rather than visibility, so revealing the buttons on hover never
+   shifts the title text sideways. */
+.ci-actions {
+  flex: 0 0 auto; display: flex; gap: 1px;
+  opacity: 0; transition: opacity .12s ease;
 }
-.chat-item:hover .ci-edit { visibility: visible; }
-.ci-edit:hover { background: var(--line); color: var(--ink); }
+.chat-item:hover .ci-actions,
+.chat-item.active .ci-actions,
+.ci-actions:focus-within { opacity: 1; }
+
+.ci-btn {
+  background: transparent; border: none; color: var(--muted);
+  cursor: pointer; font-size: 12px; line-height: 1;
+  padding: 4px 5px; border-radius: 5px;
+}
+.ci-btn:hover { background: var(--line); color: var(--ink); }
+.ci-btn.danger:hover { background: rgba(248,113,113,.14); color: #f87171; }
+
+/* Renaming happens in place, in the row you clicked. */
+.ci-input, .title-input {
+  flex: 1; min-width: 0;
+  background: var(--bg); color: var(--ink);
+  border: 1px solid var(--accent-dim); border-radius: 6px;
+  padding: 3px 7px; font: inherit; outline: none;
+}
+.ci-input { font-size: 14px; }
+.title-input { font-size: 15px; }
 
 #chatTitle { cursor: pointer; }
 #chatTitle:hover { color: var(--ink); }
+
+/* ---------- notice banner ---------- */
+.banner {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 16px; font-size: 12.5px; color: #eab308;
+  background: rgba(234,179,8,.10);
+  border-bottom: 1px solid rgba(234,179,8,.28);
+}
+.banner.hidden { display: none; }
+.banner span { flex: 1; }
+.banner-x {
+  background: transparent; border: none; color: inherit;
+  cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; opacity: .75;
+}
+.banner-x:hover { opacity: 1; }
+
+.dot.offline { background: #eab308; box-shadow: 0 0 10px #eab308; }
+#modelInfo.warn { color: #eab308; }
+
+/* ---------- toasts ---------- */
+.toast-wrap {
+  position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+  z-index: 70; pointer-events: none;
+  display: flex; flex-direction: column; gap: 8px; align-items: center;
+}
+.toast {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+  padding: 9px 15px; border-radius: 999px; font-size: 13px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  max-width: 78vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  animation: toast-in .18s ease;
+}
+.toast.out { opacity: 0; transition: opacity .22s ease; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
 
 /* ---------- linked repository ---------- */
 .repo-pill {
@@ -242,7 +320,19 @@ body.dropping::after {
 }
 .ghost:hover { border-color: var(--accent-dim); color: var(--ink); }
 
+/* An irreversible action should look like one. */
+.danger-btn {
+  background: #b91c1c; border: 1px solid #b91c1c; color: #fff;
+  padding: 7px 15px; border-radius: 9px; cursor: pointer;
+  font-size: 13px; font-weight: 600;
+}
+.danger-btn:hover { background: #dc2626; }
+.danger-btn:focus-visible { outline: 2px solid #f87171; outline-offset: 2px; }
+
 @media (max-width: 720px) {
   .sidebar { position: absolute; z-index: 20; height: 100%; }
   .sidebar.hidden { margin-left: -264px; }
+  /* There is no hover on a touch screen, so the row buttons always show. */
+  .ci-actions { opacity: 1; }
+  .ci-btn { padding: 6px 7px; }
 }

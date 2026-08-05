@@ -15,6 +15,7 @@ import binascii
 import json
 import mimetypes
 import threading
+import time
 import webbrowser
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +24,7 @@ from typing import Dict, Optional
 from urllib.parse import urlparse
 
 from ..assistant import Assistant
+from ..brain.ollama_brain import OllamaBrain
 from ..config import Config
 from . import chats
 
@@ -36,6 +38,38 @@ class _State:
         self.config = config
         self._assistants: Dict[str, Assistant] = {}
         self._lock = threading.Lock()
+        self._brain_checked = 0.0
+        self._brain_status: Optional[Dict] = None
+
+    def brain_status(self, max_age: float = 20.0) -> Dict:
+        """Whether the real model is reachable, cached for a few seconds.
+
+        The interface shows this so a fallback-mode session is obvious, instead
+        of looking like a model that has mysteriously become terse. Cached
+        because every page load asks, and the probe is a network round trip.
+        """
+        now = time.time()
+        if self._brain_status is not None and now - self._brain_checked < max_age:
+            return self._brain_status
+
+        probe = OllamaBrain(model=self.config.model, base_url=self.config.ollama_url)
+        if probe.is_available():
+            status = {"ready": True, "detail": f"{self.config.model} · local"}
+        elif probe.server_running():
+            status = {
+                "ready": False,
+                "detail": f"Ollama is running, but '{self.config.model}' isn't installed",
+                "fix": f"ollama pull {self.config.model}",
+            }
+        else:
+            status = {
+                "ready": False,
+                "detail": "Ollama isn't running — replies will be very basic",
+                "fix": "start Ollama, then reload this page",
+            }
+
+        self._brain_checked, self._brain_status = now, status
+        return status
 
     def assistant_for(self, chat_id: str) -> Assistant:
         with self._lock:
@@ -133,11 +167,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/status":
             config = self.state.config
-            brain = getattr(self.state, "_probe", None)
             return self._json({
                 "name": config.name,
                 "user": config.user_name,
                 "model": config.model,
+                "brain": self.state.brain_status(),
             })
 
         if path == "/api/chats":

@@ -13,6 +13,10 @@
     repoBtn: $("repoBtn"), repoLabel: $("repoLabel"), repoModal: $("repoModal"),
     repoList: $("repoList"), repoFilter: $("repoFilter"),
     repoCancel: $("repoCancel"), repoUnlink: $("repoUnlink"),
+    chatFilter: $("chatFilter"), banner: $("banner"), toasts: $("toasts"),
+    brainDot: $("brainDot"), confirmModal: $("confirmModal"),
+    confirmTitle: $("confirmTitle"), confirmBody: $("confirmBody"),
+    confirmOk: $("confirmOk"), confirmCancel: $("confirmCancel"),
   };
 
   let chatId = null;
@@ -21,6 +25,9 @@
   let repo = "";
   let attachments = [];
   let repos = [];
+  let chatList = [];        // the sidebar listing, newest first
+  let listFilter = "";
+  let dismissConfirm = null;   // set while the confirm dialog is open
 
   // ---------- helpers ----------
   const api = async (path, options = {}) => {
@@ -55,6 +62,55 @@
   const scrollDown = () => {
     el.messages.scrollTop = el.messages.scrollHeight;
   };
+
+  // ---------- feedback ----------
+  const toast = (text) => {
+    const node = document.createElement("div");
+    node.className = "toast";
+    node.textContent = text;
+    el.toasts.appendChild(node);
+    setTimeout(() => {
+      node.classList.add("out");
+      setTimeout(() => node.remove(), 220);
+    }, 2600);
+  };
+
+  const showBanner = (text, fix) => {
+    el.banner.innerHTML = "";
+    const label = document.createElement("span");
+    label.textContent = fix ? `${text} — ${fix}` : text;
+    const close = document.createElement("button");
+    close.className = "banner-x";
+    close.innerHTML = "&times;";
+    close.title = "Dismiss";
+    close.onclick = () => el.banner.classList.add("hidden");
+    el.banner.append(label, close);
+    el.banner.classList.remove("hidden");
+  };
+
+  /* Our own confirmation dialog rather than window.confirm, which can't be
+     styled and, in some browsers, offers to suppress itself permanently --
+     a bad outcome for an irreversible delete. Resolves true/false. */
+  const confirmDialog = ({ title, body, confirmLabel = "Delete" }) =>
+    new Promise((resolve) => {
+      el.confirmTitle.textContent = title;
+      el.confirmBody.textContent = body;
+      el.confirmOk.textContent = confirmLabel;
+      el.confirmModal.classList.remove("hidden");
+      el.confirmOk.focus();
+
+      const settle = (answer) => {
+        el.confirmModal.classList.add("hidden");
+        dismissConfirm = null;
+        resolve(answer);
+      };
+      dismissConfirm = () => settle(false);
+      el.confirmOk.onclick = () => settle(true);
+      el.confirmCancel.onclick = () => settle(false);
+      el.confirmModal.onclick = (event) => {
+        if (event.target === el.confirmModal) settle(false);
+      };
+    });
 
   const thread = () => {
     let box = el.messages.querySelector(".thread");
@@ -212,53 +268,163 @@
   };
 
   // ---------- chat list ----------
-  const renameChat = async (id, current) => {
-    const title = prompt("Rename this chat:", current || "");
-    if (title === null) return;
-    await api(`/api/chats/${id}/rename`, {
-      method: "POST", body: JSON.stringify({ title }),
-    });
-    if (id === chatId) el.title.textContent = title.trim() || "Untitled";
-    refreshList();
+  /* Rename in place. A modal for a two-word edit loses your bearings, and the
+     old prompt() couldn't even show you which chat you were renaming. */
+  const inlineEdit = ({ anchor, value, className, onCommit }) => {
+    if (!anchor.parentNode || anchor.parentNode.querySelector(`.${className}`)) return;
+    const input = document.createElement("input");
+    input.className = className;
+    input.value = value;
+    input.spellcheck = false;
+    anchor.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let settled = false;
+    const finish = async (commit) => {
+      if (settled) return;          // blur fires again as we swap the node back
+      settled = true;
+      const next = input.value.trim();
+      input.replaceWith(anchor);
+      if (commit && next && next !== value) await onCommit(next);
+    };
+
+    input.onkeydown = (event) => {
+      event.stopPropagation();      // Escape belongs to the edit, not a modal
+      if (event.key === "Enter") { event.preventDefault(); finish(true); }
+      if (event.key === "Escape") { event.preventDefault(); finish(false); }
+    };
+    input.onblur = () => finish(true);
+    ["click", "dblclick"].forEach((kind) =>
+      input.addEventListener(kind, (event) => event.stopPropagation()));
   };
 
-  const renderList = (items) => {
-    el.chatList.innerHTML = "";
-    items.forEach((chat) => {
-      const row = document.createElement("div");
-      row.className = "chat-item" + (chat.id === chatId ? " active" : "");
-      row.title = `${chat.count} message(s) — double-click to rename`;
-      const label = document.createElement("span");
-      label.className = "ci-title";
-      label.textContent = chat.title;
-      const edit = document.createElement("button");
-      edit.className = "ci-edit";
-      edit.textContent = "✎";
-      edit.title = "Rename";
-      edit.onclick = (event) => {
-        event.stopPropagation();
-        renameChat(chat.id, chat.title);
-      };
-      row.append(label, edit);
-      row.onclick = () => openChat(chat.id);
-      row.ondblclick = (event) => {
-        event.preventDefault();
-        renameChat(chat.id, chat.title);
-      };
-      el.chatList.appendChild(row);
+  const renameChat = (chat, anchor, className) =>
+    inlineEdit({
+      anchor,
+      value: chat.title,
+      className,
+      onCommit: async (title) => {
+        await api(`/api/chats/${chat.id}/rename`, {
+          method: "POST", body: JSON.stringify({ title }),
+        });
+        if (chat.id === chatId) el.title.textContent = title;
+        toast(`Renamed to “${title}”`);
+        refreshList();
+      },
     });
-    if (!items.length) {
+
+  const deleteChat = async (chat) => {
+    const count = chat.count || 0;
+    const what = count
+      ? `“${chat.title}” and its ${count} message${count === 1 ? "" : "s"}`
+      : `“${chat.title}”`;
+    const ok = await confirmDialog({
+      title: "Delete this chat?",
+      body: `${what} will be removed from this machine, along with any files ` +
+            `attached to it. Anything you asked me to remember permanently ` +
+            `stays in long-term memory.`,
+    });
+    if (!ok) return;
+
+    await api(`/api/chats/${chat.id}`, { method: "DELETE" });
+    toast("Chat deleted");
+    // If the thread that just went was the open one, fall back to a blank one.
+    if (chat.id === chatId) startNew();
+    else refreshList();
+  };
+
+  /* Date headings, the way a chat app does it. `updated` is epoch seconds. */
+  const groupFor = (updated) => {
+    const now = new Date();
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const day = 86400000;
+    const at = (updated || 0) * 1000;
+    if (at >= midnight) return "Today";
+    if (at >= midnight - day) return "Yesterday";
+    if (at >= midnight - 7 * day) return "Previous 7 days";
+    if (at >= midnight - 30 * day) return "Previous 30 days";
+    return "Older";
+  };
+
+  const chatRow = (chat) => {
+    const row = document.createElement("div");
+    row.className = "chat-item" + (chat.id === chatId ? " active" : "");
+    row.title = `${chat.count} message${chat.count === 1 ? "" : "s"}`;
+
+    const label = document.createElement("span");
+    label.className = "ci-title";
+    label.textContent = chat.title;
+
+    const edit = document.createElement("button");
+    edit.className = "ci-btn";
+    edit.textContent = "✎";
+    edit.title = "Rename";
+    edit.onclick = (event) => {
+      event.stopPropagation();
+      renameChat(chat, label, "ci-input");
+    };
+
+    const remove = document.createElement("button");
+    remove.className = "ci-btn danger";
+    remove.textContent = "🗑";
+    remove.title = "Delete";
+    remove.onclick = (event) => {
+      event.stopPropagation();
+      deleteChat(chat);
+    };
+
+    const actions = document.createElement("span");
+    actions.className = "ci-actions";
+    actions.append(edit, remove);
+
+    row.append(label, actions);
+    row.onclick = () => openChat(chat.id);
+    row.ondblclick = (event) => {
+      event.preventDefault();
+      renameChat(chat, label, "ci-input");
+    };
+    return row;
+  };
+
+  const renderList = () => {
+    const term = listFilter.trim().toLowerCase();
+    const shown = term
+      ? chatList.filter((chat) => chat.title.toLowerCase().includes(term))
+      : chatList;
+
+    el.chatList.innerHTML = "";
+    // Searching one chat is pointless, so the box only appears once it helps.
+    el.chatFilter.classList.toggle("hidden", chatList.length < 2);
+
+    if (!shown.length) {
       const note = document.createElement("div");
-      note.className = "chat-item";
-      note.textContent = "No chats yet";
+      note.className = "list-note muted";
+      note.textContent = chatList.length ? "No chats match that." : "No chats yet";
       el.chatList.appendChild(note);
+      return;
     }
+
+    // The listing arrives newest first, so the headings fall in order.
+    let heading = null;
+    shown.forEach((chat) => {
+      const group = groupFor(chat.updated);
+      if (group !== heading) {
+        heading = group;
+        const head = document.createElement("div");
+        head.className = "list-group";
+        head.textContent = group;
+        el.chatList.appendChild(head);
+      }
+      el.chatList.appendChild(chatRow(chat));
+    });
   };
 
   const refreshList = async () => {
     try {
       const data = await api("/api/chats");
-      renderList(data.chats || []);
+      chatList = data.chats || [];
+      renderList();
     } catch (_) { /* the list is cosmetic; ignore failures */ }
   };
 
@@ -360,20 +526,28 @@
   el.openSidebar.onclick = () => el.sidebar.classList.remove("hidden");
   el.closeSidebar.onclick = () => el.sidebar.classList.add("hidden");
 
-  el.del.onclick = async () => {
+  el.del.onclick = () => {
     if (!chatId) return startNew();
-    if (!confirm("Delete this chat?")) return;
-    await api(`/api/chats/${chatId}`, { method: "DELETE" });
-    startNew();
+    const meta = chatList.find((chat) => chat.id === chatId)
+      || { id: chatId, title: el.title.textContent, count: 0 };
+    deleteChat(meta);
   };
 
   document.querySelectorAll(".chip").forEach((chip) => {
     chip.onclick = () => send(chip.textContent);
   });
 
-  // Rename by clicking the title.
+  // Rename by clicking the title in the header.
   el.title.onclick = () => {
-    if (chatId) renameChat(chatId, el.title.textContent);
+    if (!chatId) return;
+    const meta = chatList.find((chat) => chat.id === chatId)
+      || { id: chatId, title: el.title.textContent };
+    renameChat(meta, el.title, "title-input");
+  };
+
+  el.chatFilter.oninput = () => {
+    listFilter = el.chatFilter.value;
+    renderList();
   };
 
   // Attachments: button, file picker, and drag-and-drop.
@@ -407,7 +581,10 @@
     if (event.target === el.repoModal) el.repoModal.classList.add("hidden");
   };
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") el.repoModal.classList.add("hidden");
+    if (event.key !== "Escape") return;
+    // The confirmation sits on top of everything, so it gets first refusal.
+    if (dismissConfirm) return dismissConfirm();
+    el.repoModal.classList.add("hidden");
   });
 
   // ---------- startup ----------
@@ -419,7 +596,13 @@
       document.title = name;
       el.greetName.textContent = status.user && status.user !== "friend"
         ? `, ${status.user}` : "";
-      el.modelInfo.textContent = `${status.model} · local`;
+
+      // Say plainly when there's no real model behind the replies.
+      const brain = status.brain || {};
+      el.modelInfo.textContent = brain.detail || `${status.model} · local`;
+      el.modelInfo.classList.toggle("warn", brain.ready === false);
+      el.brainDot.classList.toggle("offline", brain.ready === false);
+      if (brain.ready === false) showBanner(brain.detail, brain.fix);
     } catch (_) { /* defaults are fine */ }
     await refreshList();
     el.input.focus();
