@@ -21,6 +21,7 @@
     modelList: $("modelList"), modelFilter: $("modelFilter"),
     modelCancel: $("modelCancel"), modelRefresh: $("modelRefresh"),
     modelDefault: $("modelDefault"), providerHelp: $("providerHelp"),
+    modelError: $("modelError"),
   };
 
   let chatId = null;
@@ -436,7 +437,15 @@
     });
   };
 
+  /* Shown inside the picker rather than as a toast: a refusal explains what to
+     fix, and a message that disappears after two seconds is no help at all. */
+  const showModelError = (text) => {
+    el.modelError.textContent = text || "";
+    el.modelError.classList.toggle("hidden", !text);
+  };
+
   const chooseModel = async (id) => {
+    showModelError("");
     if (!chatId) {
       // A model choice belongs to a conversation, so start one.
       const created = await api("/api/chats", { method: "POST" });
@@ -446,7 +455,7 @@
       method: "POST", body: JSON.stringify({ model: id }),
     });
     if (data.error) {
-      toast(data.error);          // e.g. missing key, or model not pulled
+      showModelError(data.error);   // e.g. missing key, or model not pulled
       return;
     }
     resolved = data.model || defaultModel;
@@ -477,6 +486,7 @@
   const openModelPicker = async () => {
     el.modelModal.classList.remove("hidden");
     el.modelFilter.value = "";
+    showModelError("");
     await loadModels();
     el.modelFilter.focus();
   };

@@ -301,10 +301,23 @@ html, body {
 .tag.local { background: rgba(61,165,217,.16); color: var(--accent); }
 .tag.cloud { background: rgba(234,179,8,.16); color: #eab308; }
 
+/* The heading is a label, not an option -- make that obvious, because it looks
+   enough like a row that it invites a click that does nothing. */
+.model-group { cursor: default; user-select: none; }
+
 .model-item {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 11px; border-radius: 8px; cursor: pointer; font-size: 13.5px;
+  margin-left: 6px;
 }
+.model-item:active { transform: scale(.995); }
+
+.model-error {
+  margin-top: 8px; padding: 9px 11px; border-radius: 8px; font-size: 12.5px;
+  background: rgba(248,113,113,.10); border: 1px solid rgba(248,113,113,.30);
+  color: #fca5a5;
+}
+.model-error.hidden { display: none; }
 .model-item:hover { background: var(--panel-2); }
 .model-item.active { background: var(--panel-2); color: var(--accent); }
 .model-item.active::after { content: "✓"; margin-left: auto; }
