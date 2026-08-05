@@ -234,6 +234,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/message":
             return self._message(body)
 
+        if path == "/api/stream":
+            return self._stream(body)
+
         if path == "/api/upload":
             return self._upload(body)
 
@@ -376,12 +379,18 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"error": "not found"}, 404)
 
     # --- the conversation -------------------------------------------------
-    def _message(self, body: dict):
-        text = str(body.get("message") or "").strip()
-        chat_id = str(body.get("chat_id") or "").strip()
-        if not text:
-            return self._json({"error": "empty message"}, 400)
+    def _open_turn(self, body: dict):
+        """Shared setup for a turn: the chat, its assistant, and the user's text.
 
+        Returns (None, None, "") when there's nothing to answer -- the caller
+        reports that itself, since one endpoint replies in JSON and the other
+        in an event stream.
+        """
+        text = str(body.get("message") or "").strip()
+        if not text:
+            return None, None, ""
+
+        chat_id = str(body.get("chat_id") or "").strip()
         chat = chats.load(chat_id) if chat_id else None
         if chat is None:
             chat = chats.create()
@@ -401,6 +410,12 @@ class Handler(BaseHTTPRequestHandler):
             assistant.set_attachments(
                 attached, [a["name"] for a in chat.get("attachments", [])]
             )
+        return chat, assistant, text
+
+    def _message(self, body: dict):
+        chat, assistant, text = self._open_turn(body)
+        if chat is None:
+            return self._json({"error": "empty message"}, 400)
 
         try:
             reply = assistant.respond(text)
@@ -421,6 +436,84 @@ class Handler(BaseHTTPRequestHandler):
             "model_label": assistant.model_label(),
             "attachments": chat.get("attachments", []),
         })
+
+    def _stream(self, body: dict):
+        """Answer over server-sent events, so the reply appears as it's written.
+
+        Kept alongside /api/message rather than replacing it: the CLI still uses
+        the blocking path, and the browser falls back to it if a stream fails.
+        """
+        chat, assistant, text = self._open_turn(body)
+        if chat is None:
+            return self._json({"error": "empty message"}, 400)
+
+        # Headers by hand: an event stream has no Content-Length, and this
+        # handler speaks HTTP/1.0, so the client reads until the socket closes.
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        alive = True
+
+        def emit(event: dict) -> bool:
+            """Write one SSE frame. Returns False once the browser has gone."""
+            nonlocal alive
+            if not alive:
+                return False
+            try:
+                payload = json.dumps(event, ensure_ascii=False)
+                self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                alive = False
+                return False
+
+        # Metadata first, so a brand-new chat gets its id and title into the
+        # interface straight away rather than only once the answer lands.
+        emit({
+            "type": "meta",
+            "chat_id": chat["id"],
+            "title": chat["title"],
+            "repo": chat.get("repo", ""),
+            "model": assistant.model_id,
+            "model_label": assistant.model_label(),
+            "attachments": chat.get("attachments", []),
+        })
+
+        reply, parts, finished = "", [], False
+        try:
+            for event in assistant.respond_stream(text):
+                kind = event.get("type")
+                if kind == "chunk":
+                    parts.append(event.get("text") or "")
+                elif kind == "done":
+                    reply, finished = event.get("reply") or "", True
+                if not emit(event):
+                    break
+        except Exception as exc:
+            from ..selfheal import record
+
+            record(exc, context="the web interface (streaming)")
+            reply, finished = f"Something went wrong there ({exc.__class__.__name__}).", True
+            emit({"type": "chunk", "text": reply})
+            emit({"type": "done", "reply": reply})
+
+        # Save whatever was produced even if the tab closed mid-answer: the work
+        # is already done, and a truncated message beats losing it entirely.
+        if not reply:
+            reply = "".join(parts).strip()
+        if reply:
+            chats.append(chat, "assistant", reply)
+        chats.save(chat)
+
+        if not finished:
+            # The generator was abandoned, so the assistant's own short-term
+            # memory may be missing this turn. Drop it and let the next request
+            # rebuild it from the saved transcript.
+            self.state.forget(chat["id"])
 
 
 def serve(config: Optional[Config] = None, port: int = 8765,

@@ -395,6 +395,10 @@ Opens a browser chat at `http://127.0.0.1:8765` — separate conversations in a
 sidebar, full history, the lot. Everything the assistant can do works here:
 documents, code, reading files, health checks.
 
+- **Replies stream in** as the model writes them, with a progress line above the
+  answer for the slow steps ("Searching the web for …"). This matters most where
+  it used to hurt most: generating a document can take minutes, and a spinner
+  gave you no way to tell thinking apart from a freeze.
 - **Multiple chats.** Each conversation keeps its own context and any open
   document session; long-term memory is shared across all of them.
 - **History is saved** to `beastt_memory/chats/`, so threads survive a restart —
@@ -493,10 +497,13 @@ Type or speak naturally. Say `bye`, `quit`, or `see you later` (or press Ctrl+C)
 
 ## 🗺️ Roadmap ideas
 
+- Image generation, with the results dropped straight into slides
+- A research mode that plans, searches, reads and cites — showing each step
+- Live data connectors: economic series, markets, search trends
+- Native charts in presentations, built from described data
 - More skills: reminders, timers, controlling files & apps
-- Long-term memory that persists across sessions
 - Higher-quality neural voice with [Piper TTS](https://github.com/rhasspy/piper)
-- Wake word ("Hey BEASTT") for hands-free standby
+- Editing existing code: "add error handling to that script"
 
 ---
 
