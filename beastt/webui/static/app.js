@@ -166,6 +166,56 @@
     return wrap;
   };
 
+  /* An assistant bubble that can be written into as text arrives. It carries a
+     status line above the body for progress ("Searching the web for ..."),
+     which is removed the moment real text starts. */
+  const addStreamingMessage = () => {
+    if (el.empty) el.empty.style.display = "none";
+    const wrap = document.createElement("div");
+    wrap.className = "msg bot streaming";
+    wrap.innerHTML = `
+      <div class="avatar">J</div>
+      <div class="bubble">
+        <div class="who">${escapeHtml(name)}</div>
+        <div class="status">
+          <span class="typing"><i></i><i></i><i></i></span>
+          <span class="status-text"></span>
+        </div>
+        <div class="body"></div>
+      </div>`;
+    thread().appendChild(wrap);
+    scrollDown();
+    return {
+      node: wrap,
+      status: wrap.querySelector(".status"),
+      statusText: wrap.querySelector(".status-text"),
+      body: wrap.querySelector(".body"),
+    };
+  };
+
+  /* Read a server-sent-event response, handing each decoded payload to
+     `onEvent`. Frames are separated by a blank line; the tail of the buffer is
+     kept because a chunk can split a frame down the middle. */
+  const readEvents = async (response, onEvent) => {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() || "";
+      for (const frame of frames) {
+        const line = frame.split("\n").find((l) => l.startsWith("data:"));
+        if (!line) continue;
+        try {
+          onEvent(JSON.parse(line.slice(5).trim()));
+        } catch (_) { /* one malformed frame shouldn't kill the stream */ }
+      }
+    }
+  };
+
   // ---------- attachments ----------
   const renderAttachments = () => {
     el.attachments.innerHTML = "";
@@ -634,13 +684,24 @@
   };
 
   // ---------- sending ----------
-  const send = async (text) => {
-    if (busy || !text.trim()) return;
-    busy = true;
-    el.send.disabled = true;
-    addMessage("user", text);
-    const typing = addTyping();
+  /* Both endpoints report the same facts about the turn, so apply them once. */
+  const applyTurnMeta = (data) => {
+    if (data.chat_id) chatId = data.chat_id;
+    if (data.title) el.title.textContent = data.title;
+    if (data.repo !== undefined) { repo = data.repo; setRepoLabel(); }
+    if (data.model) {
+      // Reflect what actually answered, without implying a chat override.
+      resolved = data.model;
+      if (data.model_label) modelText = data.model_label;
+      setModelLabel();
+    }
+    if (data.attachments) { attachments = data.attachments; renderAttachments(); }
+  };
 
+  /* The original blocking path, kept as a fallback for when streaming can't
+     start -- an older browser, or a proxy that buffers the response. */
+  const sendBlocking = async (text) => {
+    const typing = addTyping();
     try {
       const data = await api("/api/message", {
         method: "POST",
@@ -649,24 +710,79 @@
       typing.remove();
       if (data.error) {
         addMessage("assistant", `Something went wrong: ${data.error}`);
-      } else {
-        chatId = data.chat_id;
-        el.title.textContent = data.title || "Chat";
-        if (data.repo !== undefined) { repo = data.repo; setRepoLabel(); }
-        if (data.model) {
-          // Reflect what actually answered, without implying a chat override.
-          resolved = data.model;
-          if (data.model_label) modelText = data.model_label;
-          setModelLabel();
-        }
-        if (data.attachments) { attachments = data.attachments; renderAttachments(); }
-        addMessage("assistant", data.reply);
-        refreshList();
+        return;
       }
+      applyTurnMeta(data);
+      addMessage("assistant", data.reply);
+      refreshList();
     } catch (err) {
       typing.remove();
       addMessage("assistant",
         "I couldn't reach the local server. Is the window running `python main.py --ui` still open?");
+    }
+  };
+
+  const send = async (text) => {
+    if (busy || !text.trim()) return;
+    busy = true;
+    el.send.disabled = true;
+    addMessage("user", text);
+
+    const view = addStreamingMessage();
+    let full = "";
+    let started = false;      // has any real text arrived?
+
+    // Re-render the whole reply each time rather than appending: a code fence
+    // or bold marker can span two chunks, and only the full text formats right.
+    const paint = () => {
+      view.body.innerHTML = format(full);
+      scrollDown();
+    };
+
+    const beginText = () => {
+      if (started) return;
+      started = true;
+      view.status.remove();
+    };
+
+    try {
+      const response = await fetch("/api/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, message: text }),
+      });
+      if (!response.ok || !response.body) throw new Error(`stream ${response.status}`);
+
+      await readEvents(response, (event) => {
+        if (event.type === "meta") {
+          applyTurnMeta(event);
+        } else if (event.type === "status") {
+          view.statusText.textContent = event.text || "";
+          scrollDown();
+        } else if (event.type === "chunk") {
+          beginText();
+          full += event.text || "";
+          paint();
+        } else if (event.type === "done") {
+          beginText();
+          full = event.reply || full;
+          paint();
+        }
+      });
+
+      if (!started) throw new Error("empty stream");
+      view.node.classList.remove("streaming");
+      refreshList();
+    } catch (err) {
+      if (started) {
+        // Something broke mid-answer. Keep what arrived -- retrying would
+        // duplicate the reply, and a truncated answer is still useful.
+        view.node.classList.remove("streaming");
+        refreshList();
+      } else {
+        view.node.remove();
+        await sendBlocking(text);
+      }
     } finally {
       busy = false;
       el.send.disabled = false;

@@ -8,7 +8,7 @@ Turn flow for each user message:
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 from .brain import Brain, build_brain
 from .brain.base import Message
@@ -186,15 +186,27 @@ class Assistant:
                 continue
         return None
 
+    def _context_for(self, text: str) -> List[Message]:
+        """Conversation + attachments + recalled facts, ready for the brain.
+
+        Everything except the web search, which is kept out so the streaming
+        path can announce it before it happens rather than after.
+        """
+        messages = self.memory.messages()
+        messages = self._augment_with_attachments(messages)
+        return self._augment_with_memories(text, messages)
+
     def respond(self, text: str) -> str:
         """Return BEASTT's reply to a single user message."""
         text = text.strip()
         if not text:
             return "I'm listening -- go ahead."
 
-        # 1. Fast path: a skill can handle it directly.
+        # 1. Fast path: a skill can handle it directly. Note the truthy check:
+        #    a skill returning "" means it had nothing to say, and treating that
+        #    as an answer produced a blank turn that was also saved to memory.
         skill_reply = self._skill_answer(text)
-        if skill_reply is not None:
+        if skill_reply:
             self.memory.add_user(text)
             self.memory.add_assistant(skill_reply)
             return skill_reply
@@ -202,9 +214,7 @@ class Assistant:
         # 2. Otherwise, think with the brain -- augmenting with a live web
         #    search first if the question needs current information.
         self.memory.add_user(text)
-        messages = self.memory.messages()
-        messages = self._augment_with_attachments(messages)
-        messages = self._augment_with_memories(text, messages)
+        messages = self._context_for(text)
         if self.search is not None and needs_search(text):
             messages = self._augment_with_search(text, messages)
 
@@ -224,6 +234,71 @@ class Assistant:
 
         self.memory.add_assistant(reply)
         return reply
+
+    def respond_stream(self, text: str) -> Iterator[dict]:
+        """Answer, emitting events as the reply is produced.
+
+        Yields dicts with a `type`:
+          status  -- work in progress, e.g. a web search, safe to show and discard
+          chunk   -- a fragment of the reply, in order
+          done    -- carries the complete `reply`, and is always last
+
+        A skill answers instantly, so its reply arrives as a single chunk: the
+        caller never needs to know which path was taken. Memory is updated the
+        same way `respond()` does it, so the two can be used interchangeably.
+        """
+        text = text.strip()
+        if not text:
+            nudge = "I'm listening -- go ahead."
+            yield {"type": "chunk", "text": nudge}
+            yield {"type": "done", "reply": nudge}
+            return
+
+        skill_reply = self._skill_answer(text)
+        if skill_reply:
+            self.memory.add_user(text)
+            self.memory.add_assistant(skill_reply)
+            yield {"type": "chunk", "text": skill_reply}
+            yield {"type": "done", "reply": skill_reply}
+            return
+
+        self.memory.add_user(text)
+        messages = self._context_for(text)
+        if self.search is not None and needs_search(text):
+            yield {"type": "status", "text": f"Searching the web for “{extract_query(text)}”"}
+            messages = self._augment_with_search(text, messages)
+
+        yield {"type": "status", "text": f"Thinking with {self.model_label()}"}
+
+        parts: List[str] = []
+        try:
+            for chunk in self.brain.stream(messages):
+                if not chunk:
+                    continue
+                parts.append(chunk)
+                yield {"type": "chunk", "text": chunk}
+        except Exception as exc:
+            from .selfheal import record
+
+            record(exc, context="thinking about a reply")
+            # Keep whatever arrived before the failure -- a truncated answer is
+            # more use than replacing it with an apology.
+            if not parts:
+                excuse = (
+                    "Hmm, I hit a snag trying to think that through "
+                    f"({exc.__class__.__name__}). Say \"fix yourself\" and I'll "
+                    "check what's wrong."
+                )
+                parts.append(excuse)
+                yield {"type": "chunk", "text": excuse}
+
+        reply = "".join(parts).strip()
+        if not reply:
+            reply = "I'm not quite sure how to answer that -- can you say a bit more?"
+            yield {"type": "chunk", "text": reply}
+
+        self.memory.add_assistant(reply)
+        yield {"type": "done", "reply": reply}
 
     def _augment_with_search(self, text: str, messages):
         """Run a live web search and append the results as context for the brain."""

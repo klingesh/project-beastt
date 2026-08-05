@@ -72,11 +72,15 @@ class OllamaBrain(Brain):
         resp.raise_for_status()
         return resp.json().get("message", {}).get("content", "").strip()
 
-    def stream(self, messages: List[Message]) -> Iterator[str]:
+    def stream(self, messages: List[Message], num_ctx: int = 8192) -> Iterator[str]:
         payload = {
             "model": self.model,
             "messages": self.to_dicts(messages),
             "stream": True,
+            # Same raised context as reply(). Without this, streaming quietly
+            # used Ollama's small default and truncated long conversations --
+            # a difference that would only ever show up when streaming.
+            "options": {"num_ctx": num_ctx},
         }
         with requests.post(
             f"{self.base_url}/api/chat", json=payload, stream=True, timeout=self.timeout
