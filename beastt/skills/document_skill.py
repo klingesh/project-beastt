@@ -17,7 +17,11 @@ from .base import Skill
 
 # Which words mean which format.
 _KINDS = (
-    ("presentation", r"\b(ppt|power\s?point|powerpoint|presentation|slide\s?deck|slides|deck)\b"),
+    # "slide 1" matters as much as "slides": a pasted script says "Slide 1",
+    # "Slide 2", never the plural -- and without this it was detected as a Word
+    # document and built as a .docx.
+    ("presentation",
+     r"\b(ppt|power\s?point|powerpoint|presentation|slide\s?deck|slides|deck|slide\s*\d+)\b"),
     ("spreadsheet", r"\b(excel|spread\s?sheet|spreadsheet|xlsx|work\s?book|csv\s?sheet)\b"),
     ("document", r"\b(word\s+document|word\s+doc|word\s+file|\bdocx\b|word|document|report|essay|letter|article)\b"),
 )
@@ -44,6 +48,30 @@ _FORMAT_WORDS = re.compile(
     r"docx|word|document|report|essay|file|sheet)\b",
     re.IGNORECASE,
 )
+
+
+#: Someone pasting their own script rarely writes "make a ppt about ...", so the
+#: verb-based trigger above misses it entirely and the whole thing goes to the
+#: model, which then just talks about the deck instead of building one.
+_PASTED = re.compile(
+    r"\b(?:from|using|with|out\s+of|based\s+on|into)\s+(?:this|these|the\s+following|it|below)\b"
+    r"|\b(?:this|the\s+following)\b[^.\n]{0,30}\b(?:script|outline|content|notes|text)\b"
+    r"|\bturn\s+(?:this|it)\s+into\b|\bconvert\s+(?:this|it)\b",
+    re.IGNORECASE,
+)
+
+
+def wants_outline(text: str) -> bool:
+    """True when the user has supplied the content and wants it laid out.
+
+    Deliberately generous: a message carrying several "Slide N" markers is
+    content whatever else it says, and laying it out is never the wrong reading.
+    """
+    from ..outline import looks_like_outline
+
+    if not looks_like_outline(text):
+        return False
+    return True
 
 
 _REPORT = re.compile(r"\breports?\b", re.IGNORECASE)
@@ -96,13 +124,19 @@ class DocumentSkill(Skill):
     def matches(self, text: str) -> bool:
         if _TRIGGER.search(text):
             return True
+        # Content the user has written out as slides, with or without an
+        # instruction. Without this the message reaches the model, which
+        # cheerfully discusses the deck instead of building one -- and has been
+        # known to claim it pushed a file that was never created.
+        if wants_outline(text):
+            return True
         # While a document is open, claim instruction-shaped follow-ups.
         return self.workshop.looks_like_revision(text)
 
     def run(self, text: str) -> str:
         # An open document takes priority: "add a slide about costs" should edit
         # what we just made rather than trigger a brand-new file.
-        if self.workshop.active and not _TRIGGER.search(text):
+        if self.workshop.active and not _TRIGGER.search(text) and not wants_outline(text):
             if self.workshop.is_done(text):
                 path = self.workshop.path
                 revisions = self.workshop.revisions
@@ -139,10 +173,25 @@ class DocumentSkill(Skill):
         # Read the count from the original request, not the extracted topic:
         # "make a 10 slide deck about X" has the number outside the subject.
         want = requested_count(text)
-        size = f" ({want} slides)" if want and kind == "presentation" else (
-            f" ({want} sections)" if want else "")
-        print(f"[docs] Writing a {kind} about {topic!r}{size}...")
-        spec = plan(self._brain_provider(), kind, topic, want=want)
+
+        # If the user has already written the content, lay THAT out. Asking the
+        # model to invent a deck here would throw their work away and replace it
+        # with generalities.
+        spec = None
+        if wants_outline(text):
+            from ..outline import parse as parse_outline
+
+            spec = parse_outline(text, kind)
+            if spec:
+                count = len(spec.get("slides") or spec.get("sections") or [])
+                print(f"[docs] Laying out your own content: {count} "
+                      f"{'slides' if kind == 'presentation' else 'sections'}.")
+
+        if spec is None:
+            size = f" ({want} slides)" if want and kind == "presentation" else (
+                f" ({want} sections)" if want else "")
+            print(f"[docs] Writing a {kind} about {topic!r}{size}...")
+            spec = plan(self._brain_provider(), kind, topic, want=want)
         if not spec:
             return (
                 f"I couldn't put together good content for that {label}. "
