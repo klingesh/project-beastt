@@ -38,11 +38,24 @@ class Config:
     name: str = _get("BEASTT_NAME", "JARVIS")
     user_name: str = _get("BEASTT_USER_NAME", "friend")
 
-    # Brain (Ollama)
+    # Brain (Ollama) -- the local model, and still the default.
     model: str = _get("BEASTT_MODEL", "llama3.2")
     ollama_url: str = _get("BEASTT_OLLAMA_URL", "http://localhost:11434")
     # Generous, because generating a whole document on a laptop GPU is slow.
     request_timeout: int = int(_get("BEASTT_TIMEOUT", "300"))
+
+    # Hosted model providers -- every one optional. BEASTT behaves exactly as it
+    # always has if none are set; adding a key is the only thing that makes a
+    # provider's models appear in the picker. GitHub Models reuses the existing
+    # BEASTT_GITHUB_TOKEN further down, so it may already work for you.
+    groq_key: str = _get("BEASTT_GROQ_KEY", "")
+    cerebras_key: str = _get("BEASTT_CEREBRAS_KEY", "")
+    openrouter_key: str = _get("BEASTT_OPENROUTER_KEY", "")
+    mistral_key: str = _get("BEASTT_MISTRAL_KEY", "")
+    openai_key: str = _get("BEASTT_OPENAI_KEY", "")
+    #: Which model to start with, as "provider:model" (e.g.
+    #: "groq:llama-3.3-70b-versatile"). Empty means the local model named above.
+    default_model: str = _get("BEASTT_DEFAULT_MODEL", "")
 
     # Voice
     voice_enabled: bool = _get("BEASTT_VOICE", "off").lower() in ("on", "true", "1", "yes")

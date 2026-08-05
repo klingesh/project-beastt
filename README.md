@@ -409,6 +409,39 @@ without opening a window.
 The interface listens on localhost only and has no authentication, so keep it to
 your own machine. Note that if `BEASTT_SHELL=on`, commands can be run from here too.
 
+## 🔀 Choosing a model
+
+The local Ollama model is the default and needs no account. Add an API key for a
+hosted provider and its models appear in the **model pill** in the chat
+interface's header — pick one per conversation, the way you'd switch models in
+any chat app.
+
+| Provider | Env var | Cost | Notes |
+|----------|---------|------|-------|
+| Local (Ollama) | `BEASTT_MODEL` | Free | Nothing leaves your machine |
+| GitHub Models | `BEASTT_GITHUB_TOKEN` | Free tier | **No new signup** — reuses your existing token, just add the `models:read` scope |
+| Groq | `BEASTT_GROQ_KEY` | Free tier, no card | Very fast; good for everyday chat |
+| Cerebras | `BEASTT_CEREBRAS_KEY` | Free tier, no card | Large daily token budget; good for documents |
+| OpenRouter | `BEASTT_OPENROUTER_KEY` | Free tier | Many models; names ending `:free` cost nothing |
+| Mistral | `BEASTT_MISTRAL_KEY` | Free tier | — |
+| OpenAI | `BEASTT_OPENAI_KEY` | Paid | Only if you want GPT models directly |
+
+Model ids are `provider:model`, so `--model groq:llama-3.3-70b-versatile` works
+from the command line too, and `BEASTT_DEFAULT_MODEL` sets the starting choice.
+
+Three things worth knowing:
+
+- **Cloud models send your messages to that provider.** The picker tags every
+  model `local` or `cloud`, and the header pill shows a ☁ when the current one
+  isn't running on your machine. Local remains the default precisely so this is
+  always a deliberate choice.
+- **Model lists are fetched live**, not hard-coded. Free line-ups change often,
+  and a stale list fails silently at the worst moment. Hit **Refresh** in the
+  picker if a provider has just added something.
+- **A bad choice can't strand you.** Switching is refused with a clear reason if
+  the key is missing or the local model isn't pulled, and each chat remembers its
+  own model, so one thread can stay local while another uses something faster.
+
 ## ⚙️ Configuration
 
 Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
@@ -416,7 +449,13 @@ Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 | Setting | Env var | Default |
 |---------|---------|---------|
 | Assistant name / wake word | `BEASTT_NAME` | `JARVIS` |
-| Model | `BEASTT_MODEL` | `llama3.2` |
+| Local model | `BEASTT_MODEL` | `llama3.2` |
+| Starting model | `BEASTT_DEFAULT_MODEL` | (the local one) |
+| Groq key | `BEASTT_GROQ_KEY` | (unset) |
+| Cerebras key | `BEASTT_CEREBRAS_KEY` | (unset) |
+| OpenRouter key | `BEASTT_OPENROUTER_KEY` | (unset) |
+| Mistral key | `BEASTT_MISTRAL_KEY` | (unset) |
+| OpenAI key | `BEASTT_OPENAI_KEY` | (unset) |
 | What it calls you | `BEASTT_USER_NAME` | `friend` |
 | Voice on/off | `BEASTT_VOICE` | `off` |
 | Speaking speed | `BEASTT_TTS_RATE` | `175` |

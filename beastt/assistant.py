@@ -40,9 +40,15 @@ class Assistant:
         brain: Optional[Brain] = None,
         skills: Optional[List[Skill]] = None,
         verbose: bool = True,
+        model_id: Optional[str] = None,
     ):
         self.config = config or Config.load()
-        self.brain = brain or build_brain(self.config, verbose=verbose)
+        from . import providers
+
+        self.model_id = model_id or providers.default_model_id(self.config)
+        self.brain = brain or build_brain(
+            self.config, verbose=verbose, model_id=self.model_id
+        )
         self.skills = skills if skills is not None else default_skills(self.config)
         self.memory = Memory(
             system_prompt=system_prompt(self.config.name, self.config.user_name),
@@ -117,6 +123,51 @@ class Assistant:
     def welcome(self) -> str:
         """The greeting BEASTT says when it wakes up."""
         return welcome_message(self.config.user_name)
+
+    # --- which model is thinking ------------------------------------------
+    def model_label(self) -> str:
+        """A short human description of the model currently in use."""
+        from . import providers
+
+        return providers.describe(self.model_id)
+
+    def set_model(self, model_id: str) -> Optional[str]:
+        """Switch the model doing the thinking. Returns None on success.
+
+        The conversation is untouched -- only the brain behind it changes, so you
+        can start a document on the local model and finish it on a faster hosted
+        one. Skills hold `brain_provider=lambda: self.brain`, so they follow the
+        switch automatically and don't need rebuilding.
+
+        On failure a short reason is returned instead of switching, because
+        moving to an unreachable model would break every following turn.
+        """
+        from . import providers
+
+        provider_id, model = providers.split_model_id(model_id)
+        provider = providers.get(provider_id)
+        if provider is None or not model:
+            return "I don't recognise that model."
+
+        brain = providers.build(self.config, model_id)
+        if brain is None:
+            return (
+                f"There's no API key for {provider.label} yet. "
+                f"Add {provider.env_var} to your .env and restart me."
+            )
+        if not brain.is_available():
+            if provider.is_local:
+                return (
+                    f"Ollama doesn't have '{model}'. Run: ollama pull {model}"
+                )
+            return (
+                f"{provider.label} didn't accept that request. "
+                f"Check {provider.env_var} in your .env is valid."
+            )
+
+        self.brain = brain
+        self.model_id = providers.join_model_id(provider_id, model)
+        return None
 
     # --- conversation -----------------------------------------------------
     def _skill_answer(self, text: str) -> Optional[str]:

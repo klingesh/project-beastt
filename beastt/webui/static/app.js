@@ -17,6 +17,10 @@
     brainDot: $("brainDot"), confirmModal: $("confirmModal"),
     confirmTitle: $("confirmTitle"), confirmBody: $("confirmBody"),
     confirmOk: $("confirmOk"), confirmCancel: $("confirmCancel"),
+    modelBtn: $("modelBtn"), modelLabel: $("modelLabel"), modelModal: $("modelModal"),
+    modelList: $("modelList"), modelFilter: $("modelFilter"),
+    modelCancel: $("modelCancel"), modelRefresh: $("modelRefresh"),
+    modelDefault: $("modelDefault"), providerHelp: $("providerHelp"),
   };
 
   let chatId = null;
@@ -28,6 +32,12 @@
   let chatList = [];        // the sidebar listing, newest first
   let listFilter = "";
   let dismissConfirm = null;   // set while the confirm dialog is open
+  let model = "";              // this chat's override; "" means use the default
+  let resolved = "";           // the model actually answering
+  let modelText = "Model";     // what the topbar pill shows
+  let modelRows = [];          // catalogue from /api/models
+  let providerRows = [];
+  let defaultModel = "";
 
   // ---------- helpers ----------
   const api = async (path, options = {}) => {
@@ -35,7 +45,12 @@
       headers: { "Content-Type": "application/json" },
       ...options,
     });
-    if (!response.ok && response.status !== 404) {
+    /* A 4xx body carries a human-readable {error} that the caller wants to
+       show -- an unsupported file type, a model with no API key. Those are
+       data, not exceptions. Throwing on them (as this used to) meant every
+       carefully worded server message was replaced by a generic catch-all.
+       Only server faults are genuinely unexpected. */
+    if (response.status >= 500) {
       throw new Error(`${response.status}`);
     }
     return response.json();
@@ -267,6 +282,155 @@
     el.repoFilter.focus();
   };
 
+  // ---------- model picker ----------
+  /* Ids look like "provider:model", and Ollama's own names contain colons
+     ("ollama:llama3.1:8b"), so only the first one separates the two parts. */
+  const shortModel = (id) => {
+    const cut = String(id || "").indexOf(":");
+    return cut === -1 ? String(id || "") : id.slice(cut + 1);
+  };
+
+  const isCloud = (id) => {
+    const row = modelRows.find((m) => m.id === id);
+    if (row) return row.kind === "cloud";
+    // Before the catalogue loads, the prefix is a good enough guess.
+    return Boolean(id) && !String(id).startsWith("ollama:");
+  };
+
+  const setModelLabel = () => {
+    el.modelLabel.textContent = modelText || "Model";
+    // Highlighted only when this chat overrides the global default.
+    el.modelBtn.classList.toggle("pinned", Boolean(model));
+    const cloud = isCloud(resolved || model || defaultModel);
+    el.modelBtn.classList.toggle("cloud", cloud);
+    el.modelBtn.title = cloud
+      ? `${modelText} — a cloud model, so your messages go to that provider`
+      : `${modelText} — runs locally, nothing leaves this machine`;
+  };
+
+  const applyModel = (override, label) => {
+    model = override || "";
+    if (label) modelText = label;
+    else modelText = shortModel(model || defaultModel) || "Model";
+    setModelLabel();
+  };
+
+  const renderModels = () => {
+    const term = el.modelFilter.value.trim().toLowerCase();
+    const shown = term
+      ? modelRows.filter((m) => m.model.toLowerCase().includes(term)
+                             || m.provider_label.toLowerCase().includes(term))
+      : modelRows;
+
+    el.modelList.innerHTML = "";
+    if (!shown.length) {
+      const note = document.createElement("div");
+      note.className = "muted";
+      note.style.padding = "10px";
+      note.textContent = modelRows.length
+        ? "No models match that."
+        : "No models available yet — see below.";
+      el.modelList.appendChild(note);
+      return;
+    }
+
+    const active = model || defaultModel;
+    let heading = null;
+    shown.forEach((row) => {
+      if (row.provider_label !== heading) {
+        heading = row.provider_label;
+        const head = document.createElement("div");
+        head.className = "model-group";
+        const name = document.createElement("span");
+        name.textContent = heading;
+        const tag = document.createElement("span");
+        tag.className = `tag ${row.kind}`;
+        tag.textContent = row.kind;
+        head.append(name, tag);
+        el.modelList.appendChild(head);
+      }
+
+      const item = document.createElement("div");
+      item.className = "model-item" + (row.id === active ? " active" : "");
+      const name = document.createElement("span");
+      name.className = "mi-name";
+      name.textContent = row.model;
+      item.appendChild(name);
+      if (row.id === defaultModel) {
+        const note = document.createElement("span");
+        note.className = "mi-note muted";
+        note.textContent = "default";
+        item.appendChild(note);
+      }
+      item.onclick = () => chooseModel(row.id);
+      el.modelList.appendChild(item);
+    });
+  };
+
+  /* Providers that aren't ready are listed with the exact fix, because "no
+     models available" on its own gives you nowhere to go. */
+  const renderProviderHelp = () => {
+    el.providerHelp.innerHTML = "";
+    providerRows.filter((p) => p.status !== "ready").forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "ph-row";
+      const bits = [`<strong>${escapeHtml(p.label)}</strong> — ${escapeHtml(p.status)}`];
+      if (!p.configured && p.signup) {
+        bits.push(`<a href="${escapeHtml(p.signup)}" target="_blank" rel="noopener">get a key</a>`);
+      }
+      if (!p.configured && p.env_var) {
+        bits.push(`then set <code>${escapeHtml(p.env_var)}</code> in .env`);
+      }
+      row.innerHTML = bits.join(" · ");
+      el.providerHelp.appendChild(row);
+    });
+  };
+
+  const chooseModel = async (id) => {
+    if (!chatId) {
+      // A model choice belongs to a conversation, so start one.
+      const created = await api("/api/chats", { method: "POST" });
+      chatId = created.id;
+    }
+    const data = await api(`/api/chats/${chatId}/model`, {
+      method: "POST", body: JSON.stringify({ model: id }),
+    });
+    if (data.error) {
+      toast(data.error);          // e.g. missing key, or model not pulled
+      return;
+    }
+    resolved = data.model || defaultModel;
+    applyModel(data.model, data.label);
+    renderModels();
+    el.modelModal.classList.add("hidden");
+    toast(id ? `Now using ${modelText}` : `Back to the default — ${modelText}`);
+    refreshList();
+  };
+
+  const loadModels = async (refresh = false) => {
+    const note = document.createElement("div");
+    note.className = "muted";
+    note.style.padding = "10px";
+    note.textContent = refresh ? "Refreshing…" : "Loading…";
+    el.modelList.innerHTML = "";
+    el.modelList.appendChild(note);
+
+    const data = await api(`/api/models${refresh ? "?refresh=1" : ""}`);
+    modelRows = data.models || [];
+    providerRows = data.providers || [];
+    defaultModel = data.default || defaultModel;
+    renderModels();
+    renderProviderHelp();
+    setModelLabel();
+  };
+
+  const openModelPicker = async () => {
+    el.modelModal.classList.remove("hidden");
+    el.modelFilter.value = "";
+    await loadModels();
+    el.modelFilter.focus();
+  };
+
   // ---------- chat list ----------
   /* Rename in place. A modal for a two-word edit loses your bearings, and the
      old prompt() couldn't even show you which chat you were renaming. */
@@ -444,6 +608,8 @@
     el.title.textContent = chat.title || "Chat";
     repo = chat.repo || "";
     attachments = chat.attachments || [];
+    resolved = "";
+    applyModel(chat.model || "");
     setRepoLabel();
     renderAttachments();
     clearThread();
@@ -457,6 +623,8 @@
     chatId = null;
     repo = "";
     attachments = [];
+    resolved = "";
+    applyModel("");
     el.title.textContent = "New chat";
     setRepoLabel();
     renderAttachments();
@@ -485,6 +653,12 @@
         chatId = data.chat_id;
         el.title.textContent = data.title || "Chat";
         if (data.repo !== undefined) { repo = data.repo; setRepoLabel(); }
+        if (data.model) {
+          // Reflect what actually answered, without implying a chat override.
+          resolved = data.model;
+          if (data.model_label) modelText = data.model_label;
+          setModelLabel();
+        }
         if (data.attachments) { attachments = data.attachments; renderAttachments(); }
         addMessage("assistant", data.reply);
         refreshList();
@@ -572,6 +746,16 @@
     if (files.length) uploadFiles(files);
   });
 
+  // Model picker.
+  el.modelBtn.onclick = openModelPicker;
+  el.modelCancel.onclick = () => el.modelModal.classList.add("hidden");
+  el.modelRefresh.onclick = () => loadModels(true);
+  el.modelDefault.onclick = () => chooseModel("");
+  el.modelFilter.oninput = renderModels;
+  el.modelModal.onclick = (event) => {
+    if (event.target === el.modelModal) el.modelModal.classList.add("hidden");
+  };
+
   // Repository picker.
   el.repoBtn.onclick = openRepoPicker;
   el.repoCancel.onclick = () => el.repoModal.classList.add("hidden");
@@ -585,6 +769,7 @@
     // The confirmation sits on top of everything, so it gets first refusal.
     if (dismissConfirm) return dismissConfirm();
     el.repoModal.classList.add("hidden");
+    el.modelModal.classList.add("hidden");
   });
 
   // ---------- startup ----------
@@ -599,6 +784,8 @@
 
       // Say plainly when there's no real model behind the replies.
       const brain = status.brain || {};
+      defaultModel = status.default_model || "";
+      applyModel("", brain.label);
       el.modelInfo.textContent = brain.detail || `${status.model} · local`;
       el.modelInfo.classList.toggle("warn", brain.ready === false);
       el.brainDot.classList.toggle("offline", brain.ready === false);
