@@ -12,7 +12,7 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
         <div class="brand">
-          <span class="dot"></span>
+          <span class="dot" id="brainDot"></span>
           <span id="brandName">JARVIS</span>
         </div>
         <button class="icon-btn" id="closeSidebar" title="Hide chats">&times;</button>
@@ -21,6 +21,9 @@
       <button class="new-chat" id="newChat">
         <span>+</span> New chat
       </button>
+
+      <input type="text" class="chat-search hidden" id="chatFilter"
+             placeholder="Search chats…" autocomplete="off">
 
       <div class="chat-list" id="chatList"></div>
 
@@ -39,6 +42,10 @@
         </button>
         <button class="icon-btn danger" id="deleteChat" title="Delete this chat">🗑</button>
       </header>
+
+      <!-- Surfaces setup problems (e.g. no model installed) instead of letting
+           them look like a model that has simply gone quiet. -->
+      <div class="banner hidden" id="banner"></div>
 
       <div class="messages" id="messages">
         <div class="empty" id="empty">
@@ -82,6 +89,20 @@
       </div>
     </div>
   </div>
+
+  <!-- Confirmation, in place of the browser's own dialog -->
+  <div class="modal hidden" id="confirmModal">
+    <div class="modal-card">
+      <h3 id="confirmTitle">Are you sure?</h3>
+      <p class="muted" id="confirmBody"></p>
+      <div class="modal-actions">
+        <button class="ghost" id="confirmCancel">Cancel</button>
+        <button class="danger-btn" id="confirmOk">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-wrap" id="toasts"></div>
 
   <script src="/static/app.js"></script>
 </body>
