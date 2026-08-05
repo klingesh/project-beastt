@@ -23,10 +23,12 @@ _SCHEMAS = {
   "slides": [
     {"layout": "bullets",
      "title": "slide title",
-     "bullets": ["short bullet", "short bullet", "short bullet"],
+     "bullets": ["a substantive point carrying a fact, figure or example"],
      "key_message": "the single takeaway",
      "notes": "speaker notes",
-     "image_query": "photo subject, only for layout image"}
+     "image_query": "photo subject, only for layout image",
+     "chart": {"type": "bar|line|pie", "categories": ["label"],
+               "series": [{"name": "series name", "values": [0]}]}}
   ],
   "closing": "Thank you"
 }""",
@@ -47,20 +49,83 @@ _SCHEMAS = {
 }""",
 }
 
-_GUIDANCE = {
-    "presentation": (
-        "Aim for 6-9 slides that tell a clear story: context, then substance, then "
-        "implications. Each slide needs 3-5 punchy bullets (max ~12 words each), a "
-        "one-sentence key_message, and useful speaker notes. Include concrete "
-        "figures, dates, or examples where you can. Avoid generic filler."
-    ),
-    "document": (
-        "Aim for 4-6 sections with substantive paragraphs (2-4 sentences each). "
-        "For \"design\".\"font\" pick either \"Times New Roman\" for formal or academic "
-        "subjects, or \"SF Pro Text\" for modern, product, or design subjects."
-    ),
-    "spreadsheet": "Design sensible columns and 8-15 realistic example rows. Numbers as numbers.",
+#: Word forms people use for a count ("a ten slide deck").
+_WORD_NUMBERS = {
+    "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13,
+    "fourteen": 14, "fifteen": 15, "sixteen": 16, "eighteen": 18, "twenty": 20,
 }
+
+_COUNT_BEFORE = re.compile(
+    r"(\d{1,2}|" + "|".join(_WORD_NUMBERS) + r")[\s-]*"
+    r"(?:slide|slides|page|pages|section|sections)\b",
+    re.IGNORECASE,
+)
+_COUNT_AFTER = re.compile(
+    r"(?:slide|slides|page|pages|section|sections)\s*(?:count|:|=|of)?\s*"
+    r"(\d{1,2}|" + "|".join(_WORD_NUMBERS) + r")\b",
+    re.IGNORECASE,
+)
+
+#: Sane bounds. Below 3 there is no deck; above 30 a local model will not hold it.
+_MIN_ITEMS, _MAX_ITEMS = 3, 30
+
+
+def requested_count(text: str) -> Optional[int]:
+    """How many slides or sections the user explicitly asked for, if they said.
+
+    "make a 10 slide deck about X" has to beat the built-in default, which
+    previously told the model to aim for 6-9 regardless of what was asked.
+    """
+    for pattern in (_COUNT_BEFORE, _COUNT_AFTER):
+        match = pattern.search(text or "")
+        if not match:
+            continue
+        token = match.group(1).lower()
+        value = _WORD_NUMBERS.get(token)
+        if value is None:
+            try:
+                value = int(token)
+            except ValueError:
+                continue
+        if _MIN_ITEMS <= value <= _MAX_ITEMS:
+            return value
+    return None
+
+
+def _guidance(kind: str, want: Optional[int] = None) -> str:
+    """Build the per-kind instructions, honouring an explicit count if given."""
+    if kind == "presentation":
+        size = (f"Produce exactly {want} content slides."
+                if want else "Produce 8 to 12 content slides.")
+        return (
+            f"{size} They must tell a clear story: context, then evidence, then "
+            "implications, then what to do next.\n"
+            "  - Each slide needs 3 to 5 bullets. A bullet is a full, informative "
+            "phrase of roughly 10 to 20 words that carries a concrete fact, figure, "
+            "date, percentage, currency amount or named example. Two-word labels "
+            "like \"Finite resource\" are not acceptable -- say what, how much, and "
+            "why it matters.\n"
+            "  - Vary the layouts. In a deck this size include at least one \"stat\" "
+            "slide, at least one \"chart\" slide with real numbers, and one "
+            "\"comparison\" slide. Use \"section\" dividers to separate the major "
+            "parts of a longer deck.\n"
+            "  - Every slide needs a one-sentence key_message and speaker notes that "
+            "add something not already on the slide."
+        )
+    if kind == "document":
+        size = (f"Produce exactly {want} sections."
+                if want else "Produce 5 to 8 sections.")
+        return (
+            f"{size} Each needs 2 to 4 substantive paragraphs of 3 to 5 sentences, "
+            "with concrete figures and named examples rather than generalities. "
+            "For \"design\".\"font\" pick either \"Times New Roman\" for formal or "
+            "academic subjects, or \"SF Pro Text\" for modern, product, or design "
+            "subjects."
+        )
+    rows = f"{want}" if want else "10 to 20"
+    return (f"Design sensible columns and {rows} realistic example rows. "
+            "Numbers as numbers, not strings.")
 
 _PROMPT = """You are generating the CONTENT for a {kind}. Topic: {topic}
 
@@ -74,6 +139,11 @@ Rules:
 - Set "layout" on each slide. Use "bullets" for most slides, and "image" (with an
   "image_query") for two or three where a photograph helps. Other options:
   "stat" -- also give "stat" and "stat_label";
+  "chart" -- also give "chart" with a "type" of bar, line or pie, a
+  "categories" list of labels, and a "series" list of {{name, values}}. Values
+  must be real numbers you are confident about, and every series must have
+  exactly as many values as there are categories. Prefer a chart over prose
+  whenever the point is quantitative;
   "comparison" -- also give "left" and "right", each with a heading and points;
   "quote" -- also give "quote" and "attribution";
   "timeline" -- also give "timeline", a list of items with label and text;
@@ -169,6 +239,74 @@ def _clean(value) -> str:
     return " ".join(str(value).replace("*", "").split())
 
 
+_CHART_TYPES = ("bar", "column", "line", "pie", "doughnut")
+
+
+def _number(value) -> Optional[float]:
+    """Coerce a model's value to a number, tolerating "1,200", "45%" and "$3.2"."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = re.sub(r"[^0-9.\-]", "", str(value or ""))
+    if text in ("", "-", ".", "-."):
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _normalise_chart(raw) -> Optional[Dict]:
+    """Validate a chart description, or return None if it can't be drawn.
+
+    Models are loose with this: series of the wrong length, numbers as strings
+    with units attached, a single value where a list belongs. Anything that
+    can't be made consistent is rejected here so the renderer never has to cope.
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    kind = _clean(raw.get("type") or "bar").lower()
+    if kind not in _CHART_TYPES:
+        kind = "bar"
+
+    categories = [_clean(c)[:40] for c in (raw.get("categories") or []) if _clean(c)]
+    if len(categories) < 2:
+        return None
+
+    series = []
+    for item in raw.get("series") or []:
+        if isinstance(item, dict):
+            name = _clean(item.get("name") or "Series")[:40]
+            values = item.get("values")
+        else:
+            continue
+        if not isinstance(values, (list, tuple)):
+            continue
+        numbers = [_number(v) for v in values]
+        # Trim or pad to match the categories exactly; python-pptx requires it.
+        numbers = [n for n in numbers if n is not None]
+        if len(numbers) < 2:
+            continue
+        numbers = numbers[: len(categories)]
+        if len(numbers) < len(categories):
+            categories = categories[: len(numbers)]
+        series.append({"name": name, "values": numbers})
+
+    if not series:
+        return None
+    # Re-trim every series in case a later one was shorter than an earlier one.
+    width = min(len(categories), min(len(s["values"]) for s in series))
+    if width < 2:
+        return None
+    return {
+        "type": kind,
+        "categories": categories[:width],
+        "series": [{"name": s["name"], "values": s["values"][:width]} for s in series[:4]],
+    }
+
+
 def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
     """Coerce the model's output into exactly what the renderers expect."""
     out: Dict = {"title": _clean(spec.get("title") or topic)[:120]}
@@ -199,6 +337,13 @@ def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
                 slide["image_query"] = image_query_for(
                     slide.get("image_query") or slide["title"], topic
                 )
+            chart = _normalise_chart(item.get("chart"))
+            if chart:
+                slide["chart"] = chart
+            elif slide["layout"] == "chart":
+                # A chart slide with no usable numbers would render as an empty
+                # frame, so demote it rather than ship a blank.
+                slide["layout"] = "bullets"
             for side in ("left", "right"):
                 col = item.get(side)
                 if isinstance(col, dict):
@@ -221,7 +366,7 @@ def _normalise(kind: str, spec: Dict, topic: str) -> Dict:
         slides = [
             s for s in slides
             if s["title"] or s["bullets"] or s.get("stat") or s.get("quote")
-            or s.get("timeline") or s.get("left") or s.get("right")
+            or s.get("timeline") or s.get("left") or s.get("right") or s.get("chart")
         ]
         _ensure_visuals(slides, topic)
         out["slides"] = slides
@@ -306,7 +451,12 @@ def _ensure_visuals(slides: list, topic: str = "", wanted: int = 2) -> None:
     """
     if len(slides) < 4:
         return
-    if any(str(s.get("layout") or "").lower() == "image" for s in slides):
+
+    # Scale with the deck: two photos in a twenty-slide deck still reads as flat.
+    wanted = max(wanted, len(slides) // 5)
+    already = sum(1 for s in slides if str(s.get("layout") or "").lower() == "image")
+    missing = wanted - already
+    if missing <= 0:
         return
 
     # Prefer middle slides with a title and few bullets -- they have room for art.
@@ -317,7 +467,7 @@ def _ensure_visuals(slides: list, topic: str = "", wanted: int = 2) -> None:
         and slide.get("title")
         and len(slide.get("bullets") or []) <= 4
     ]
-    for slide in candidates[1 : 1 + wanted]:
+    for slide in candidates[1 : 1 + missing]:
         slide["layout"] = "image"
         if not slide.get("image_query"):
             slide["image_query"] = image_query_for(slide["title"], topic)
@@ -439,10 +589,41 @@ def new_item(brain: Brain, kind: str, topic: str, deck_title: str) -> Optional[D
     }
 
 
-def plan(brain: Brain, kind: str, topic: str, attempts: int = 2) -> Optional[Dict]:
-    """Ask the model for document content; retry once if the reply is unusable."""
+def _item_key(kind: str) -> str:
+    return {"presentation": "slides", "document": "sections"}.get(kind, "sheets")
+
+
+def _top_up(brain: Brain, kind: str, spec: Dict, topic: str, want: int) -> None:
+    """Bring a short deck up to the requested length, one item at a time.
+
+    Asking for a single slide is far more reliable than asking the model to
+    regenerate the whole deck longer -- the same reason `new_item` exists for
+    "add a slide about X". Capped so a stubborn model can't loop forever.
+    """
+    key = _item_key(kind)
+    if key == "sheets":
+        return
+    items = spec.get(key) or []
+    deck_title = spec.get("title") or topic
+    for index in range(min(want - len(items), 6)):
+        extra = new_item(brain, kind, f"{topic} (additional detail, part {index + 1})",
+                         deck_title)
+        if not extra:
+            break
+        items.append(extra)
+    spec[key] = items
+
+
+def plan(brain: Brain, kind: str, topic: str, attempts: int = 2,
+         want: Optional[int] = None) -> Optional[Dict]:
+    """Ask the model for document content; retry once if the reply is unusable.
+
+    `want` is an explicit item count the user asked for. It drives the prompt and
+    is then enforced, because a model told "exactly 10" will still hand back 7.
+    """
     prompt = _PROMPT.format(
-        kind=kind, topic=topic, schema=_SCHEMAS[kind], guidance=_GUIDANCE[kind]
+        kind=kind, topic=topic, schema=_SCHEMAS[kind],
+        guidance=_guidance(kind, want),
     )
     # First try constrained JSON decoding; if that fails, fall back to plain
     # prompting, since some models produce better content unconstrained.
@@ -467,6 +648,15 @@ def plan(brain: Brain, kind: str, topic: str, attempts: int = 2) -> Optional[Dic
         else:
             spec = _normalise(kind, data, topic)
             if not _is_thin(kind, spec):
+                if want:
+                    key = _item_key(kind)
+                    items = spec.get(key) or []
+                    if len(items) > want:
+                        # Trim from the end: the opening slides carry the setup.
+                        spec[key] = items[:want]
+                    elif len(items) < want:
+                        _top_up(brain, kind, spec, topic, want)
+                    _ensure_visuals(spec.get("slides") or [], topic)
                 return spec
             got = (
                 len(spec.get("slides") or []) if kind == "presentation"

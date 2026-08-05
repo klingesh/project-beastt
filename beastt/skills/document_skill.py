@@ -126,7 +126,7 @@ class DocumentSkill(Skill):
 
     def _create(self, text: str) -> str:
         from ..config import Config
-        from ..docgen import plan
+        from ..docgen import plan, requested_count
         from ..documents import MissingLibrary, _resolve_theme, build
 
         kind = detect_kind(text)
@@ -136,8 +136,13 @@ class DocumentSkill(Skill):
         if not topic:
             return f"Sure -- what should the {label} be about?"
 
-        print(f"[docs] Writing a {kind} about {topic!r}...")
-        spec = plan(self._brain_provider(), kind, topic)
+        # Read the count from the original request, not the extracted topic:
+        # "make a 10 slide deck about X" has the number outside the subject.
+        want = requested_count(text)
+        size = f" ({want} slides)" if want and kind == "presentation" else (
+            f" ({want} sections)" if want else "")
+        print(f"[docs] Writing a {kind} about {topic!r}{size}...")
+        spec = plan(self._brain_provider(), kind, topic, want=want)
         if not spec:
             return (
                 f"I couldn't put together good content for that {label}. "
