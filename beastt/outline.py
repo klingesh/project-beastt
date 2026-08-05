@@ -55,14 +55,37 @@ _TITLE_LINE = re.compile(r"^\s*(?:deck\s+)?title\s*[:\-–]\s*(.+)$", re.IGNOREC
 _CLOSING = re.compile(r"^(thank\s*you|thanks|questions|q\s*&\s*a|any\s+questions)\b",
                       re.IGNORECASE)
 
-_MAX_BULLETS = 5          # beyond this a slide is split, not crammed
+#: The bullet renderer splits a long list into two columns, so a slide holds
+#: more than you'd guess. Splitting earlier than this fights the user's own
+#: structure: they decided where the slide breaks go.
+_MAX_BULLETS = 8
+#: Only a genuinely unreadable slide is split beyond what the user asked for.
+_SPLIT_ABOVE = 11
 _MIN_SECTIONS = 3         # fewer than this isn't an outline worth trusting
+
+#: A short line with no terminal punctuation is a label for the prose beneath
+#: it, not a bullet of its own: "Microsoft Azure AI" heads the two sentences
+#: and the "Risk:" note that follow, and together they are one point.
+_LABEL_WORDS = 7
+_LABEL_CHARS = 52
 
 
 def _clean(text: str) -> str:
     text = _ASIDE.sub(" ", str(text or ""))
     text = text.replace("*", "").replace("#", "")
     return " ".join(text.split()).strip(" \t-–—:•▪·")
+
+
+def _clean_line(text: str) -> str:
+    """Like `_clean`, but preserves a trailing colon.
+
+    That colon is the only signal distinguishing a lead-in ("Max Fashion can:")
+    from a heading ("Microsoft Azure AI"), and stripping it early meant the
+    lead-in absorbed the whole list beneath it.
+    """
+    out = _ASIDE.sub(" ", str(text or ""))
+    out = out.replace("*", "").replace("#", "")
+    return " ".join(out.split()).strip(" \t-–—•▪·")
 
 
 def _sentences(text: str) -> List[str]:
@@ -122,11 +145,77 @@ def looks_like_outline(text: str) -> bool:
     return len(_split_sections(text)) >= _MIN_SECTIONS
 
 
+def _is_label(text: str) -> bool:
+    """A heading for the lines beneath it, rather than a point in its own right."""
+    if not text or len(text) > _LABEL_CHARS:
+        return False
+    if text[-1] in ".!?":
+        return False
+    return len(text.split()) <= _LABEL_WORDS
+
+
+def _group_labelled(rows: List[str]) -> List[str]:
+    """Fold a label and the prose under it into a single bullet.
+
+    Presentation scripts are written like:
+
+        Microsoft Azure AI
+        Predicts customer demand.
+        Risk: High implementation cost.
+
+    That is one item. Treating each line as a bullet turned five tools into
+    twenty-one bullets, which then became five slides.
+    """
+    out: List[str] = []
+    pending: Optional[str] = None
+    detail: List[str] = []
+    run = 0            # consecutive labels emitted with nothing beneath them
+
+    def flush():
+        nonlocal pending, detail, run
+        if pending is None:
+            return
+        if detail:
+            out.append(f"{pending} — {' '.join(detail)}")
+            run = 0
+        else:
+            out.append(pending)
+            run += 1
+        pending, detail = None, []
+
+    for row in rows:
+        # A line ending in a colon introduces the list beneath it -- it is not a
+        # heading that owns those lines. "By implementing AI, Max Fashion can:"
+        # swallowed all six benefits into a single bullet.
+        if row.endswith(":"):
+            flush()
+            out.append(row.rstrip(" :"))
+            run = 0
+            continue
+
+        if _is_label(row):
+            flush()
+            pending = row
+            continue
+
+        # Absorb prose under a label, but not after a run of bare labels: that
+        # is a parallel list ("Month 1 ... Month 5"), and a trailing sentence
+        # belongs to the section, not to its last item.
+        if pending is not None and len(detail) < 3 and run < 2:
+            detail.append(row)
+        else:
+            flush()
+            out.append(row)
+    flush()
+    return out
+
+
 def _bullets_from(lines: List[str]) -> tuple:
     """Turn a section's body into (bullets, speaker notes).
 
-    Explicit bullets win. Failing that, prose is split into sentences -- a
-    paragraph is not a slide, but its sentences make serviceable points.
+    Explicit bullets win. Failing that, prose is grouped under its labels and
+    then split into sentences -- a paragraph is not a slide, but its sentences
+    make serviceable points.
     """
     bullets, prose = [], []
     for line in lines:
@@ -139,20 +228,22 @@ def _bullets_from(lines: List[str]) -> tuple:
             if value:
                 bullets.append(value)
         else:
-            cleaned = _clean(stripped)
+            cleaned = _clean_line(stripped)
             if cleaned:
                 prose.append(cleaned)
 
     notes = " ".join(prose)[:600] or None
 
     if not bullets:
-        for chunk in prose:
-            bullets.extend(_sentences(chunk))
+        grouped = _group_labelled(prose)
+        for chunk in grouped:
+            # A grouped item is already one point; only split loose prose.
+            bullets.extend([chunk] if "—" in chunk else _sentences(chunk))
     else:
         # Prose sitting under a bullet is usually that bullet's explanation.
         # Fold short ones in so the detail isn't lost.
-        for chunk in prose:
-            if len(chunk) < 160 and len(bullets) < 12:
+        for chunk in _group_labelled(prose):
+            if len(chunk) < 220 and len(bullets) < 12:
                 bullets.append(chunk)
 
     seen, unique = set(), []
@@ -164,15 +255,40 @@ def _bullets_from(lines: List[str]) -> tuple:
     return unique, notes
 
 
+#: How a presenter states their subject in an opening line: "Today, I will
+#: present my AI consulting solution for Max Fashion, one of India's ...".
+_SUBJECT = re.compile(
+    r"\b(?:present(?:ing)?|presentation\s+(?:on|about)|topic\s+is|talk(?:ing)?\s+about|"
+    r"speak(?:ing)?\s+(?:on|about)|discuss(?:ing)?)\s+"
+    r"(?:my|our|the|a|an|about|on)?\s*"
+    r"(.{6,90}?)(?=[,.;:]|\s+(?:which|that|and\s+how|focusing)\b|$)",
+    re.IGNORECASE,
+)
+
+
 def _deck_title(text: str, sections: List[Dict]) -> str:
-    explicit = None
-    for line in str(text or "").splitlines():
+    """The best available name for the deck.
+
+    An explicit "Title:" line wins. Otherwise the opening slide usually says
+    what the talk is about in prose -- far better than "About Max Fashion",
+    which is merely the first section that isn't called "Introduction".
+    """
+    body = str(text or "")
+
+    for line in body.splitlines():
         match = _TITLE_LINE.match(line)
         if match:
-            explicit = _clean(match.group(1))
-            break
-    if explicit:
-        return explicit[:120]
+            return _clean(match.group(1))[:120]
+
+    # Only look in the opening section: later mentions of "present" are content.
+    opening = "\n".join(sections[0]["lines"]) if sections else body[:900]
+    match = _SUBJECT.search(opening)
+    if match:
+        subject = _clean(match.group(1))
+        # Guard against a fragment: it should read like a noun phrase.
+        if 6 <= len(subject) <= 90 and len(subject.split()) >= 2:
+            return subject[:120].strip(" ,.;:")
+
     for section in sections:
         title = section.get("title") or ""
         if title and not _WEAK_TITLE.match(title):
@@ -218,24 +334,31 @@ def parse(text: str, kind: str = "presentation") -> Optional[Dict]:
         if not title and not bullets:
             continue
 
-        # A section the user wrote for two slides, or one carrying more points
-        # than fit, becomes several slides rather than an unreadable wall.
+        # The user decided where the slide breaks go. Honour that: a section
+        # spans two slides only if they wrote it as two ("Slide 10 & 11"), or if
+        # it carries so many points that one slide would be unreadable.
         span = max(section.get("span", 1), 1)
-        needed = max(span, (len(bullets) + _MAX_BULLETS - 1) // _MAX_BULLETS or 1)
+        needed = span
+        if len(bullets) > _SPLIT_ABOVE:
+            needed = max(span, (len(bullets) + _MAX_BULLETS - 1) // _MAX_BULLETS)
+
         if needed <= 1:
             slides.append({"layout": "bullets", "title": title or "Slide",
-                           "bullets": bullets[:_MAX_BULLETS], "notes": notes})
+                           "bullets": bullets, "notes": notes})
             continue
 
-        per = max(1, (len(bullets) + needed - 1) // needed)
-        for index in range(needed):
-            chunk = bullets[index * per : (index + 1) * per]
-            if not chunk and index:
-                break
+        # Spread evenly so no continuation is left with a single orphan point.
+        per = -(-len(bullets) // needed)
+        chunks = [bullets[i * per : (i + 1) * per] for i in range(needed)]
+        chunks = [c for c in chunks if c]
+        if len(chunks) > 1 and len(chunks[-1]) == 1:
+            chunks[-2].extend(chunks.pop())
+
+        for index, chunk in enumerate(chunks):
             slides.append({
                 "layout": "bullets",
                 "title": title if index == 0 else f"{title} (cont.)",
-                "bullets": chunk[:_MAX_BULLETS],
+                "bullets": chunk,
                 "notes": notes if index == 0 else None,
             })
 
