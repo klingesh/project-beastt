@@ -13,7 +13,7 @@ local model instead of crashing.
 from __future__ import annotations
 
 import json
-from typing import Dict, Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional, Sequence
 
 import requests
 
@@ -33,7 +33,8 @@ class OpenAICompatBrain(Brain):
         timeout: int = 300,
         label: str = "",
         extra_headers: Optional[Dict[str, str]] = None,
-        catalog_url: str = "",
+        catalog_urls: Sequence[str] = (),
+        catalog_headers: Optional[Dict[str, str]] = None,
     ):
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -41,17 +42,24 @@ class OpenAICompatBrain(Brain):
         self.timeout = timeout
         self.label = label or model
         self.extra_headers = dict(extra_headers or {})
-        # Most providers list models at {base}/models, but GitHub Models keeps
-        # its catalogue on a different path, so it can be overridden.
-        self.catalog_url = catalog_url or f"{self.base_url}/models"
+        # Most providers list models at {base}/models. Some publish their
+        # catalogue elsewhere, and more than one address may be plausible, so
+        # each is tried in turn rather than us betting on one.
+        self.catalog_urls = tuple(catalog_urls) or (f"{self.base_url}/models",)
+        # A catalogue may need different headers from inference -- GitHub's is a
+        # REST endpoint wanting its own Accept type, while inference is plain JSON.
+        self.catalog_headers = dict(catalog_headers or {})
+        #: Why the last catalogue lookup failed, for reporting to the user.
+        self.last_error = ""
 
     # --- plumbing ---------------------------------------------------------
-    def _headers(self) -> Dict[str, str]:
+    def _headers(self, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
         headers.update(self.extra_headers)
+        headers.update(extra or {})
         return headers
 
     @staticmethod
@@ -72,30 +80,14 @@ class OpenAICompatBrain(Brain):
         return str(error)[:300]
 
     # --- availability -----------------------------------------------------
-    def list_models(self, timeout: int = 10) -> Optional[List[str]]:
-        """Model names this provider advertises. None means it wasn't reachable.
-
-        The None-vs-empty-list distinction matters: callers use it to tell "the
-        provider is down" apart from "the provider works but publishes no list".
-        """
-        try:
-            resp = requests.get(
-                self.catalog_url, headers=self._headers(), timeout=timeout
-            )
-        except Exception:
-            return None
-        if resp.status_code >= 400:
-            return None
-        try:
-            body = resp.json()
-        except Exception:
-            return None
-
+    @staticmethod
+    def _parse_catalog(body) -> Optional[List[str]]:
+        """Pull model names out of a catalogue body, or None if it isn't one."""
         # OpenAI wraps the list in {"data": [...]}; some catalogues are a bare
         # list. Accept either, and entries keyed by id, name or model.
         rows = body.get("data") if isinstance(body, dict) else body
         if not isinstance(rows, list):
-            return []
+            return None
 
         names: List[str] = []
         for row in rows:
@@ -106,6 +98,48 @@ class OpenAICompatBrain(Brain):
                 if found:
                     names.append(str(found))
         return names
+
+    def list_models(self, timeout: int = 10) -> Optional[List[str]]:
+        """Model names this provider advertises. None means it wasn't reachable.
+
+        The None-vs-empty-list distinction matters: callers use it to tell "the
+        provider is down" apart from "the provider works but publishes no list".
+        On failure `last_error` explains why, which is the difference between
+        "check your key" and a status code you can actually act on.
+        """
+        self.last_error = ""
+        problems: List[str] = []
+
+        for url in self.catalog_urls:
+            try:
+                resp = requests.get(
+                    url, headers=self._headers(self.catalog_headers), timeout=timeout
+                )
+            except Exception as exc:
+                problems.append(f"{exc.__class__.__name__}")
+                continue
+
+            if resp.status_code >= 400:
+                problems.append(f"HTTP {resp.status_code} {self._explain(resp)}".strip())
+                continue
+
+            try:
+                body = resp.json()
+            except Exception:
+                problems.append("catalogue wasn't JSON")
+                continue
+
+            names = self._parse_catalog(body)
+            if names is None:
+                problems.append("catalogue in an unexpected shape")
+                continue
+
+            self.catalog_urls = (url,) + tuple(u for u in self.catalog_urls if u != url)
+            return names
+
+        # Report the first attempt's reason: later candidates are only guesses.
+        self.last_error = (problems[0] if problems else "unreachable")[:160]
+        return None
 
     def is_available(self) -> bool:
         """True if the provider answers with this key.

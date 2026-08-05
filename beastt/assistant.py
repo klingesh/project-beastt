@@ -160,9 +160,11 @@ class Assistant:
                 return (
                     f"Ollama doesn't have '{model}'. Run: ollama pull {model}"
                 )
+            why = getattr(brain, "last_error", "")
             return (
-                f"{provider.label} didn't accept that request. "
-                f"Check {provider.env_var} in your .env is valid."
+                f"{provider.label} didn't accept that request"
+                + (f" ({why})" if why else "")
+                + f". Check {provider.env_var} in your .env is valid."
             )
 
         self.brain = brain

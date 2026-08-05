@@ -40,11 +40,13 @@ class Provider:
     env_var: str = ""
     signup: str = ""
     blurb: str = ""
-    #: Some catalogues don't live at {base_url}/models.
-    catalog_url: str = ""
+    #: Candidate catalogue addresses, tried in order. Empty means {base_url}/models.
+    catalog_urls: Tuple[str, ...] = ()
     #: Sort hints only -- never used to decide what exists.
     recommend: Tuple[str, ...] = ()
     extra_headers: Tuple[Tuple[str, str], ...] = ()
+    #: Extra headers for the catalogue only, where it isn't a plain JSON API.
+    catalog_headers: Tuple[Tuple[str, str], ...] = ()
 
     @property
     def is_local(self) -> bool:
@@ -66,7 +68,17 @@ PROVIDERS: Tuple[Provider, ...] = (
         label="GitHub Models",
         kind=CLOUD,
         base_url="https://models.github.ai/inference",
-        catalog_url="https://models.github.ai/catalog/models",
+        # The catalogue is a GitHub REST endpoint rather than an OpenAI-style
+        # one, and has lived at more than one address; try both instead of
+        # betting on either.
+        catalog_urls=(
+            "https://models.github.ai/catalog/models",
+            "https://api.github.com/catalog/models",
+        ),
+        catalog_headers=(
+            ("Accept", "application/vnd.github+json"),
+            ("X-GitHub-Api-Version", "2022-11-28"),
+        ),
         key_field="github_token",
         env_var="BEASTT_GITHUB_TOKEN",
         signup="https://github.com/settings/tokens",
@@ -130,8 +142,10 @@ PROVIDERS: Tuple[Provider, ...] = (
 
 _BY_ID: Dict[str, Provider] = {p.id: p for p in PROVIDERS}
 
-#: provider id -> (fetched_at, names or None). None means "couldn't reach it".
-_cache: Dict[str, Tuple[float, Optional[List[str]]]] = {}
+#: provider id -> (fetched_at, names or None, why it failed).
+#: A None name list means "couldn't reach it"; the reason is kept so the
+#: interface can say *why* rather than just showing an empty list.
+_cache: Dict[str, Tuple[float, Optional[List[str]], str]] = {}
 _CACHE_TTL = 300.0        # seconds; long enough to keep the picker snappy
 
 
@@ -202,27 +216,28 @@ def is_configured(config: Config, provider: Provider) -> bool:
 
 
 # --- discovery --------------------------------------------------------------
-def _ollama_models(config: Config) -> Optional[List[str]]:
+def _ollama_models(config: Config) -> Tuple[Optional[List[str]], str]:
     """What's actually pulled locally, via Ollama's own (non-OpenAI) endpoint."""
     try:
         import requests
 
         resp = requests.get(f"{config.ollama_url.rstrip('/')}/api/tags", timeout=5)
         if resp.status_code >= 400:
-            return None
+            return None, f"HTTP {resp.status_code}"
         rows = resp.json().get("models") or []
-    except Exception:
-        return None
-    return [str(r.get("name")) for r in rows if r.get("name")]
+    except Exception as exc:
+        return None, exc.__class__.__name__
+    return [str(r.get("name")) for r in rows if r.get("name")], ""
 
 
-def _fetch(config: Config, provider: Provider) -> Optional[List[str]]:
+def _fetch(config: Config, provider: Provider) -> Tuple[Optional[List[str]], str]:
+    """(model names, failure reason). Names are None only when unreachable."""
     if provider.is_local:
         return _ollama_models(config)
 
     key = key_for(config, provider)
     if not key:
-        return None
+        return None, "no key"
 
     from .brain.openai_compat import OpenAICompatBrain
 
@@ -230,23 +245,30 @@ def _fetch(config: Config, provider: Provider) -> Optional[List[str]]:
         model="",
         base_url=provider.base_url,
         api_key=key,
-        catalog_url=provider.catalog_url,
+        catalog_urls=provider.catalog_urls,
         extra_headers=dict(provider.extra_headers),
+        catalog_headers=dict(provider.catalog_headers),
     )
-    return probe.list_models()
+    names = probe.list_models()
+    return names, ("" if names is not None else probe.last_error)
+
+
+def _discover(config: Config, provider: Provider,
+              force: bool = False) -> Tuple[Optional[List[str]], str]:
+    now = time.time()
+    cached = _cache.get(provider.id)
+    if not force and cached and now - cached[0] < _CACHE_TTL:
+        return cached[1], cached[2]
+
+    names, why = _fetch(config, provider)
+    _cache[provider.id] = (now, names, why)
+    return names, why
 
 
 def discover(config: Config, provider: Provider,
              force: bool = False) -> Optional[List[str]]:
     """Model names for one provider, cached briefly. None means unreachable."""
-    now = time.time()
-    cached = _cache.get(provider.id)
-    if not force and cached and now - cached[0] < _CACHE_TTL:
-        return cached[1]
-
-    names = _fetch(config, provider)
-    _cache[provider.id] = (now, names)
-    return names
+    return _discover(config, provider, force=force)[0]
 
 
 def clear_cache() -> None:
@@ -273,7 +295,8 @@ def catalogue(config: Config, force: bool = False) -> Dict:
 
     for provider in PROVIDERS:
         configured = is_configured(config, provider)
-        names = discover(config, provider, force=force) if configured else None
+        names, why = (_discover(config, provider, force=force)
+                      if configured else (None, "no key"))
 
         row = {
             "id": provider.id,
@@ -288,8 +311,14 @@ def catalogue(config: Config, force: bool = False) -> Dict:
         if not configured:
             row["status"] = "no key"
         elif names is None:
-            row["status"] = ("Ollama isn't running" if provider.is_local
-                             else "couldn't reach it -- check the key")
+            if provider.is_local:
+                row["status"] = "Ollama isn't running"
+            else:
+                # Include the provider's own reason: a 401 means the key is
+                # wrong or lacks a scope, while a 404 means we have the address
+                # wrong -- and those need completely different fixes.
+                row["status"] = f"couldn't reach it — {why}" if why else "couldn't reach it"
+                row["detail"] = why
         elif not names:
             row["status"] = ("no models pulled yet" if provider.is_local
                              else "no models offered")
@@ -343,5 +372,6 @@ def build(config: Config, model_id: str) -> Optional[Brain]:
         timeout=getattr(config, "request_timeout", 300),
         label=describe(model_id),
         extra_headers=dict(provider.extra_headers),
-        catalog_url=provider.catalog_url,
+        catalog_urls=provider.catalog_urls,
+        catalog_headers=dict(provider.catalog_headers),
     )
