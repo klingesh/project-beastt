@@ -63,28 +63,12 @@ PROVIDERS: Tuple[Provider, ...] = (
         blurb="Runs on this machine. Nothing leaves your laptop.",
         recommend=("llama3.1:8b", "llama3.2", "qwen2.5", "qwen3"),
     ),
-    Provider(
-        id="github",
-        label="GitHub Models",
-        kind=CLOUD,
-        base_url="https://models.github.ai/inference",
-        # The catalogue is a GitHub REST endpoint rather than an OpenAI-style
-        # one, and has lived at more than one address; try both instead of
-        # betting on either.
-        catalog_urls=(
-            "https://models.github.ai/catalog/models",
-            "https://api.github.com/catalog/models",
-        ),
-        catalog_headers=(
-            ("Accept", "application/vnd.github+json"),
-            ("X-GitHub-Api-Version", "2022-11-28"),
-        ),
-        key_field="github_token",
-        env_var="BEASTT_GITHUB_TOKEN",
-        signup="https://github.com/settings/tokens",
-        blurb="Free with your GitHub account. Needs the models:read scope.",
-        recommend=("openai/gpt-4.1-mini", "openai/gpt-4.1", "openai/gpt-4o-mini"),
-    ),
+    # GitHub Models was here. It was retired for every customer on 30 July 2026
+    # -- playground, catalogue, inference API and BYOK all removed -- so the
+    # endpoint now answers 410 Gone. Removed rather than left in the picker
+    # advertising something that cannot work. Note this has nothing to do with
+    # BEASTT_GITHUB_TOKEN, which is still used for pushing files and reading
+    # repositories; only the hosted-model service is gone.
     Provider(
         id="groq",
         label="Groq",

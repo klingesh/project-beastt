@@ -63,6 +63,23 @@ def build_brain(config: Config, verbose: bool = True,
             print(f"[brain] Using local model '{ollama.model}' via Ollama.")
         return ollama
 
+    # A saved id can name a provider that no longer exists -- GitHub Models was
+    # retired mid-2026 -- in which case it parses as an odd local model name.
+    # Retry on the configured model rather than telling the user to pull it.
+    if ollama.model != config.model:
+        plain = OllamaBrain(
+            model=config.model,
+            base_url=config.ollama_url,
+            timeout=getattr(config, "request_timeout", 300),
+        )
+        if plain.is_available():
+            if verbose:
+                print(
+                    f"[brain] '{ollama.model}' isn't available; "
+                    f"using local model '{config.model}' instead."
+                )
+            return plain
+
     if verbose:
         if ollama.server_running():
             print(

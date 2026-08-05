@@ -419,7 +419,6 @@ any chat app.
 | Provider | Env var | Cost | Notes |
 |----------|---------|------|-------|
 | Local (Ollama) | `BEASTT_MODEL` | Free | Nothing leaves your machine |
-| GitHub Models | `BEASTT_GITHUB_TOKEN` | Free tier | **No new signup** — reuses your existing token, just add the `models:read` scope |
 | Groq | `BEASTT_GROQ_KEY` | Free tier, no card | Very fast; good for everyday chat |
 | Cerebras | `BEASTT_CEREBRAS_KEY` | Free tier, no card | Large daily token budget; good for documents |
 | OpenRouter | `BEASTT_OPENROUTER_KEY` | Free tier | Many models; names ending `:free` cost nothing |
