@@ -8,6 +8,7 @@ Turn flow for each user message:
 
 from __future__ import annotations
 
+import re
 from typing import Iterator, List, Optional
 
 from .brain import Brain, build_brain
@@ -22,6 +23,44 @@ from .skills import default_skills
 from .skills.base import Skill
 from .skills.maintenance_skill import MaintenanceSkill
 from .skills.memory_skill import MemorySkill
+
+#: Llama-3 style templates wrap a reply in role headers. When the template is
+#: applied loosely the role name leaks out as the first line of the content, so
+#: the answer arrives reading "assistant\n\nHello...". Matched only when the word
+#: stands alone or is followed by a colon, so a reply that legitimately begins
+#: "Assistant roles vary..." is left alone.
+_ROLE_LEAK = re.compile(r"^\s*assistant\s*(?::|\n|$)", re.IGNORECASE)
+
+
+_LEAK_WORD = "assistant"
+
+
+def _strip_role_leak(text: str) -> str:
+    match = _ROLE_LEAK.match(text or "")
+    return text[match.end():].lstrip() if match else text
+
+
+def _leak_decided(held: str) -> bool:
+    """Can we already tell whether `held` opens with a leaked role header?
+
+    Streaming has to hold text back until this is True, so the aim is to decide
+    as early as possible. Almost every reply is settled by its first chunk --
+    "Renewable " cannot become "assistant", so it goes straight to the screen.
+    Only text that is still a possible prefix of the word is held.
+    """
+    probe = (held or "").lstrip()
+    if not probe:
+        return False
+    lowered = probe.lower()
+    if len(lowered) < len(_LEAK_WORD):
+        # Too short to be the word yet: undecided only if it could still become it.
+        return not _LEAK_WORD.startswith(lowered)
+    if not lowered.startswith(_LEAK_WORD):
+        return True
+    # We have "assistant..."; one more character settles whether it's the role
+    # header or a real word like "assistants".
+    return len(lowered) > len(_LEAK_WORD)
+
 
 _SEARCH_INSTRUCTION = (
     "[You just searched the web for the user in real time. Use the results below "
@@ -229,6 +268,7 @@ class Assistant:
                 f"({exc.__class__.__name__}). Say \"fix yourself\" and I'll "
                 "check what's wrong."
             )
+        reply = _strip_role_leak(reply)
         if not reply:
             reply = "I'm not quite sure how to answer that -- can you say a bit more?"
 
@@ -271,22 +311,48 @@ class Assistant:
         yield {"type": "status", "text": f"Thinking with {self.model_label()}"}
 
         parts: List[str] = []
+        held, opened, failure = "", False, None
         try:
             for chunk in self.brain.stream(messages):
                 if not chunk:
                     continue
+                if not opened:
+                    # Hold the opening back only while a leaked role header is
+                    # still possible -- it has to be removed before it reaches
+                    # the screen, and it can arrive split across chunks. For a
+                    # normal reply this releases on the very first chunk.
+                    held += chunk
+                    if not _leak_decided(held):
+                        continue
+                    opened = True
+                    cleaned, held = _strip_role_leak(held), ""
+                    if not cleaned:
+                        continue
+                    parts.append(cleaned)
+                    yield {"type": "chunk", "text": cleaned}
+                    continue
                 parts.append(chunk)
                 yield {"type": "chunk", "text": chunk}
         except Exception as exc:
+            failure = exc
+
+        # A reply shorter than the guard threshold is still sitting in `held`.
+        if held:
+            cleaned = _strip_role_leak(held)
+            if cleaned:
+                parts.append(cleaned)
+                yield {"type": "chunk", "text": cleaned}
+
+        if failure is not None:
             from .selfheal import record
 
-            record(exc, context="thinking about a reply")
+            record(failure, context="thinking about a reply")
             # Keep whatever arrived before the failure -- a truncated answer is
             # more use than replacing it with an apology.
             if not parts:
                 excuse = (
                     "Hmm, I hit a snag trying to think that through "
-                    f"({exc.__class__.__name__}). Say \"fix yourself\" and I'll "
+                    f"({failure.__class__.__name__}). Say \"fix yourself\" and I'll "
                     "check what's wrong."
                 )
                 parts.append(excuse)
