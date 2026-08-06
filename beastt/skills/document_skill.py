@@ -186,6 +186,9 @@ class DocumentSkill(Skill):
                 count = len(spec.get("slides") or spec.get("sections") or [])
                 print(f"[docs] Laying out your own content: {count} "
                       f"{'slides' if kind == 'presentation' else 'sections'}.")
+                # The "topic" of a pasted script is the whole script, and the
+                # reply quotes it -- which meant echoing 4,000 characters back.
+                topic = spec.get("title") or topic
 
         if spec is None:
             size = f" ({want} slides)" if want and kind == "presentation" else (
