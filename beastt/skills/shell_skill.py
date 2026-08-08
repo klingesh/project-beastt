@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 
 from .base import Skill
+from .intent import directive
 
 _RUN = re.compile(
     r"^\s*(?:hey\s+\w+[,\s]+)?(?:please\s+)?"
@@ -52,10 +53,13 @@ class ShellSkill(Skill):
     def matches(self, text: str) -> bool:
         if self._pending and (_YES.match(text) or _NO.match(text)):
             return True
+        # _RUN is anchored, so it is already safe. Cloning and pulling are not,
+        # and both touch the disk -- a repo name mentioned inside a pasted
+        # document must not start a clone.
         return bool(
             _RUN.match(text)
-            or (_CLONE_INTENT.search(text) and _CLONE.search(text))
-            or (_PULL_INTENT.search(text) and _PULL.search(text))
+            or (directive(_CLONE_INTENT, text) and _CLONE.search(text))
+            or (directive(_PULL_INTENT, text) and _PULL.search(text))
         )
 
     def run(self, text: str) -> str:
