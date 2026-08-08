@@ -110,16 +110,27 @@ class DocumentSkill(Skill):
         "spreadsheet": "Excel spreadsheet",
     }
 
-    def __init__(self, brain_provider, on_created=None):
+    def __init__(self, brain_provider, on_created=None, progress=None):
         # A callable so the skill always uses the assistant's current brain.
         self._brain_provider = brain_provider
         self._on_created = on_created
+        #: Optional sink for step-by-step progress, so the interface can show
+        #: the work instead of a deck appearing out of nowhere.
+        self._progress_sink = progress
         self.last_path = None
         # Holds the document currently being worked on, so follow-up
         # instructions revise it instead of starting from scratch.
         from ..workshop import Workshop
 
         self.workshop = Workshop()
+
+    def _progress(self, message: str) -> None:
+        """Pass a step outwards. Never let reporting break the work itself."""
+        if self._progress_sink:
+            try:
+                self._progress_sink(message)
+            except Exception:
+                pass
 
     def matches(self, text: str) -> bool:
         if _TRIGGER.search(text):
@@ -194,7 +205,20 @@ class DocumentSkill(Skill):
             size = f" ({want} slides)" if want and kind == "presentation" else (
                 f" ({want} sections)" if want else "")
             print(f"[docs] Writing a {kind} about {topic!r}{size}...")
-            spec = plan(self._brain_provider(), kind, topic, want=want)
+            brain = self._brain_provider()
+
+            # Plan first, then write each slide on its own. One call for the
+            # whole deck is why they used to read thin. Falls back to the
+            # single-shot path if planning doesn't produce a usable structure.
+            if kind == "presentation" and Config.load().doc_deliberate:
+                from ..docgen import plan_deliberate
+
+                spec = plan_deliberate(brain, kind, topic, want=want,
+                                       on_step=self._progress)
+                if spec is None:
+                    print("[docs] Planning didn't work out; writing it in one pass.")
+            if spec is None:
+                spec = plan(brain, kind, topic, want=want)
         if not spec:
             return (
                 f"I couldn't put together good content for that {label}. "

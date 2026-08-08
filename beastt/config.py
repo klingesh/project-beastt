@@ -87,6 +87,11 @@ class Config:
     # Documents (PowerPoint / Word / Excel generation)
     documents_enabled: bool = _get("BEASTT_DOCUMENTS", "on").lower() in ("on", "true", "1", "yes")
     doc_theme: str = _get("BEASTT_DOC_THEME", "navy")   # navy | slate | plum | ember
+    #: Plan the deck first, then write each slide on its own. Much better
+    #: content, but it costs one model call per slide -- turn it off if you are
+    #: on a slow local model and would rather have the deck in one shot.
+    doc_deliberate: bool = _get("BEASTT_DOC_DELIBERATE", "on").lower() in (
+        "on", "true", "1", "yes")
     # Openly-licensed photos in presentations (attribution is added automatically).
     images_enabled: bool = _get("BEASTT_IMAGES", "on").lower() in ("on", "true", "1", "yes")
 

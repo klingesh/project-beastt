@@ -589,6 +589,198 @@ def new_item(brain: Brain, kind: str, topic: str, deck_title: str) -> Optional[D
     }
 
 
+_ARC_PROMPT = """You are PLANNING a {kind} about: {topic}
+
+Plan the argument before writing any of it. Return ONLY valid JSON:
+{{"title": "the deck title",
+  "subtitle": "one-line value proposition",
+  "design": {{"palette": "navy|slate|plum|ember", "rationale": "why"}},
+  "cover_query": "two or three words describing a cover photo",
+  "slides": [
+    {{"title": "slide title",
+      "purpose": "what this one slide must achieve, in one line",
+      "layout": "bullets|stat|chart|comparison|timeline|quote|image|section",
+      "evidence": "the specific figures, dates, names or examples it needs"}}
+  ]}}
+
+Rules:
+- {size}
+- Order them so the argument builds: context, then evidence, then implications,
+  then what to do next. Each slide must earn its place -- no filler.
+- Choose each layout deliberately: "chart" where the point is quantitative,
+  "stat" for one striking number, "comparison" for before/after or us/them,
+  "timeline" for a sequence, "section" to divide the major parts.
+- Do NOT write bullet text yet. This is the plan only.
+"""
+
+_SLIDE_PROMPT = """You are writing ONE slide of a {kind} titled "{deck}".
+
+This is slide {number} of {total}.
+Title: {title}
+Its purpose: {purpose}
+Evidence it needs: {evidence}
+Intended layout: {layout}
+
+Already covered on earlier slides -- do NOT repeat any of this:
+{covered}
+
+Return ONLY valid JSON for this single slide:
+{{"title": "{title}", "layout": "{layout}",
+  "bullets": ["a full informative point"],
+  "key_message": "the single takeaway",
+  "notes": "speaker notes that add something not on the slide"{extra}}}
+
+Rules:
+- 3 to 5 bullets. Each is a full, informative phrase of roughly 10 to 20 words
+  carrying a concrete figure, date, percentage, currency amount or named
+  example. Two-word labels like "Finite resource" are not acceptable.
+- Say what, how much, and why it matters. Be specific enough that a reader
+  learns something they could quote.
+- Plain text only: no markdown, asterisks or newlines inside strings.
+"""
+
+#: Extra JSON fields each layout needs, appended to the single-slide schema.
+_LAYOUT_EXTRAS = {
+    "stat": ', "stat": "42%", "stat_label": "what the number measures"',
+    "chart": (', "chart": {"type": "bar|line|pie", "categories": ["label"], '
+              '"series": [{"name": "series", "values": [0]}]}'),
+    "comparison": (', "left": {"heading": "...", "points": ["..."]}, '
+                   '"right": {"heading": "...", "points": ["..."]}'),
+    "quote": ', "quote": "the quotation", "attribution": "who said it"',
+    "timeline": ', "timeline": [{"label": "Step 1", "text": "what happens"}]',
+    "image": ', "image_query": "photo subject"',
+}
+
+
+def plan_arc(brain: Brain, kind: str, topic: str,
+             want: Optional[int] = None) -> Optional[Dict]:
+    """Ask for the structure only -- titles, purposes, layouts, evidence needed.
+
+    Planning first is what a person does, and it is cheap: the reply is short,
+    so the model spends its attention on the argument rather than on filling
+    forty bullet points at once.
+    """
+    size = (f"Plan exactly {want} slides." if want
+            else "Plan 8 to 12 slides.")
+    prompt = _ARC_PROMPT.format(kind=kind, topic=topic, size=size)
+    try:
+        raw = ask_json(brain, prompt)
+    except Exception as exc:
+        print(f"[docs] Planning failed: {exc.__class__.__name__}")
+        return None
+
+    data = _extract_json(raw)
+    if not isinstance(data, dict):
+        return None
+
+    slides = []
+    for item in data.get("slides") or []:
+        if not isinstance(item, dict):
+            continue
+        title = _clean(item.get("title") or "")[:120]
+        if not title:
+            continue
+        slides.append({
+            "title": title,
+            "purpose": _clean(item.get("purpose") or "")[:200],
+            "evidence": _clean(item.get("evidence") or "")[:300],
+            "layout": _clean(item.get("layout") or "bullets").lower(),
+        })
+    if len(slides) < 2:
+        return None
+
+    if want and len(slides) > want:
+        slides = slides[:want]
+    return {
+        "title": _clean(data.get("title") or topic)[:120],
+        "subtitle": _clean(data.get("subtitle") or "")[:200] or None,
+        "design": data.get("design") if isinstance(data.get("design"), dict) else None,
+        "cover_query": _clean(data.get("cover_query") or "")[:80] or None,
+        "slides": slides,
+    }
+
+
+def write_slide(brain: Brain, kind: str, deck: str, item: Dict,
+                number: int, total: int, covered: str) -> Optional[Dict]:
+    """Write one planned slide properly, knowing what came before it."""
+    layout = item.get("layout") or "bullets"
+    prompt = _SLIDE_PROMPT.format(
+        kind=kind, deck=deck, number=number, total=total,
+        title=item.get("title") or "", purpose=item.get("purpose") or "",
+        evidence=item.get("evidence") or "(use your own knowledge)",
+        layout=layout, covered=covered or "(nothing yet -- this is the opening)",
+        extra=_LAYOUT_EXTRAS.get(layout, ""),
+    )
+    try:
+        raw = ask_json(brain, prompt)
+    except Exception:
+        return None
+    data = _extract_json(raw)
+    if not isinstance(data, dict):
+        return None
+
+    # Reuse the single-slide normaliser by wrapping it as a one-slide deck.
+    wrapped = _normalise("presentation", {"slides": [{**data, "layout": layout,
+                                                     "title": item.get("title")}]}, deck)
+    slides = wrapped.get("slides") or []
+    return slides[0] if slides else None
+
+
+def plan_deliberate(brain: Brain, kind: str, topic: str,
+                    want: Optional[int] = None, on_step=None) -> Optional[Dict]:
+    """Plan the deck, then write each slide on its own.
+
+    One call for the whole deck is why decks read thin: ten slides share a
+    single reply, so each gets a fraction of the model's attention and it never
+    sees what it already wrote. Here the plan comes first, then each slide is
+    written knowing its purpose and what earlier slides already covered.
+
+    Returns None if planning fails, so the caller can fall back to one-shot.
+    """
+    def step(message: str) -> None:
+        print(f"[docs] {message}")
+        if on_step:
+            try:
+                on_step(message)
+            except Exception:
+                pass
+
+    step("Planning the structure...")
+    arc = plan_arc(brain, kind, topic, want)
+    if not arc:
+        return None
+
+    planned = arc["slides"]
+    step(f"Outlined {len(planned)} slides. Writing each one...")
+
+    written, covered = [], []
+    for index, item in enumerate(planned, 1):
+        step(f"Writing slide {index} of {len(planned)}: {item['title']}")
+        slide = write_slide(brain, kind, arc["title"], item,
+                           index, len(planned), "\n".join(covered[-8:]))
+        if slide is None:
+            # Keep the planned title so the deck still follows its structure.
+            slide = {"layout": "bullets", "title": item["title"],
+                     "bullets": [item["evidence"]] if item.get("evidence") else [],
+                     "key_message": item.get("purpose") or None, "notes": None}
+        written.append(slide)
+        summary = "; ".join(slide.get("bullets") or [])[:200]
+        covered.append(f"- {slide.get('title')}: {summary}")
+
+    written = [s for s in written if s.get("title") or s.get("bullets")]
+    if len(written) < 2:
+        return None
+
+    _ensure_visuals(written, topic)
+    spec: Dict = {"title": arc["title"], "slides": written}
+    for key in ("subtitle", "design", "cover_query"):
+        if arc.get(key):
+            spec[key] = arc[key]
+    spec["closing"] = "Thank you"
+    step(f"Done -- {len(written)} slides written.")
+    return spec
+
+
 def _item_key(kind: str) -> str:
     return {"presentation": "slides", "document": "sections"}.get(kind, "sheets")
 
