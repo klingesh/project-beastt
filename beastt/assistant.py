@@ -95,6 +95,9 @@ class Assistant:
         )
         self.search = WebSearch() if self.config.search_enabled else None
         self._verbose = verbose
+        #: Set while a streaming turn is in flight, so a slow skill can report
+        #: its progress outwards. None means nobody is listening.
+        self._status_sink = None
 
         # Long-term memory: facts that persist across sessions.
         self.longterm = (
@@ -121,6 +124,7 @@ class Assistant:
                 DocumentSkill(
                     brain_provider=lambda: self.brain,
                     on_created=self._remember_document,
+                    progress=self._emit_status,
                 ),
             )
             self.skills.insert(
@@ -275,6 +279,47 @@ class Assistant:
         self.memory.add_assistant(reply)
         return reply
 
+    def _emit_status(self, message: str) -> None:
+        """Report a step from inside a skill, when someone is streaming."""
+        sink = self._status_sink
+        if sink and message:
+            try:
+                sink(str(message))
+            except Exception:
+                pass
+
+    def _skills_with_progress(self, text: str, holder: dict) -> Iterator[dict]:
+        """Run the skills, yielding their progress as it happens.
+
+        A skill's run() is an ordinary blocking call, so the only way to show
+        what it is doing is to let it push messages onto a queue while this
+        generator drains them. Building a deck is now one model call per slide,
+        which is far too long to leave the interface silent.
+        """
+        import queue
+        import threading
+
+        sink = queue.Queue()
+
+        def work():
+            try:
+                holder["reply"] = self._skill_answer(text)
+            finally:
+                sink.put(None)          # sentinel: the skill has finished
+
+        self._status_sink = sink.put
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        try:
+            while True:
+                message = sink.get()
+                if message is None:
+                    break
+                yield {"type": "status", "text": str(message)[:160]}
+        finally:
+            self._status_sink = None
+            worker.join(timeout=2)
+
     def respond_stream(self, text: str) -> Iterator[dict]:
         """Answer, emitting events as the reply is produced.
 
@@ -294,7 +339,9 @@ class Assistant:
             yield {"type": "done", "reply": nudge}
             return
 
-        skill_reply = self._skill_answer(text)
+        holder: dict = {}
+        yield from self._skills_with_progress(text, holder)
+        skill_reply = holder.get("reply")
         if skill_reply:
             self.memory.add_user(text)
             self.memory.add_assistant(skill_reply)
