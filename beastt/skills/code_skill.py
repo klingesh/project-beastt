@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 
 from .base import Skill
+from .intent import directive, plausible_name
 
 _VERB = r"(?:write|make|create|generate|build|code|scaffold|set\s+up|start|give\s+me)"
 
@@ -60,7 +61,13 @@ class CodeSkill(Skill):
         self.last_path = None
 
     def matches(self, text: str) -> bool:
-        return bool(_LIST.search(text) or _PROJECT.search(text) or _CODE.search(text))
+        # These create files, so the trigger has to read as an instruction
+        # rather than a phrase inside something the user pasted.
+        return bool(
+            directive(_LIST, text)
+            or directive(_PROJECT, text)
+            or directive(_CODE, text)
+        )
 
     def run(self, text: str) -> str:
         from ..code import SCAFFOLDS, generate, list_scaffolds, scaffold
@@ -127,10 +134,15 @@ class CodeSkill(Skill):
         match = _NAME.search(text)
         if match:
             return match.group(1)
-        # Fall back to words after "project"/"app".
-        match = re.search(r"\b(?:project|app|package|site)\s+(?:for\s+)?([\w -]{3,40})",
-                          text, re.IGNORECASE)
+        # Fall back to words after "project"/"app" -- but stay on the same line.
+        # Letting this cross a blank line turned "Resolve project\n\nI can
+        # generate a package" into a project named "i-can-generate".
+        match = re.search(
+            r"\b(?:project|app|package|site)[ \t]+(?:for[ \t]+)?([\w -]{3,40})",
+            text, re.IGNORECASE,
+        )
         if match:
-            words = match.group(1).strip().split()
-            return "-".join(w.lower() for w in words[:3])
+            words = match.group(1).strip().split()[:3]
+            if plausible_name(words):
+                return "-".join(w.lower() for w in words)
         return kind

@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 
 from .base import Skill
+from .intent import directive
 
 # Which words mean which format.
 _KINDS = (
@@ -133,7 +134,9 @@ class DocumentSkill(Skill):
                 pass
 
     def matches(self, text: str) -> bool:
-        if _TRIGGER.search(text):
+        # A buried "make a ppt" is quoted text; a pasted outline is handled
+        # separately below, which is the case that genuinely needs long input.
+        if directive(_TRIGGER, text):
             return True
         # Content the user has written out as slides, with or without an
         # instruction. Without this the message reaches the model, which

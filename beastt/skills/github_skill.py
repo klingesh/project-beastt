@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 
 from .base import Skill
+from .intent import directive
 
 _PUSH = re.compile(
     r"\b(push|upload|commit|send|save)\b[^.?!]*\b(git\s?hub|repo|repository)\b", re.IGNORECASE
@@ -59,7 +60,13 @@ class GitHubSkill(Skill):
         # or "notes" is understood as an answer rather than sent to the LLM.
         if self._pending_choice and len(text.split()) <= 8:
             return True
-        return bool(_LIST_REPOS.search(text) or _LIST_FILES.search(text) or _PUSH.search(text))
+        # Pushing writes to a repository, so "push it to github" has to be the
+        # request rather than a line inside something the user pasted.
+        return bool(
+            directive(_LIST_REPOS, text)
+            or directive(_LIST_FILES, text)
+            or directive(_PUSH, text)
+        )
 
     # --- actions ----------------------------------------------------------
     def run(self, text: str) -> str:
