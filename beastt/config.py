@@ -109,6 +109,10 @@ class Config:
 
     # Web search
     search_enabled: bool = _get("BEASTT_SEARCH", "on").lower() in ("on", "true", "1", "yes")
+    #: Work substantial requests through in steps -- understand, plan, then do
+    #: each step -- instead of answering in one call. Short or chatty messages
+    #: are always answered straight away regardless.
+    deliberate: bool = _get("BEASTT_DELIBERATE", "on").lower() in ("on", "true", "1", "yes")
     search_max_results: int = int(_get("BEASTT_SEARCH_RESULTS", "5"))
 
     # Speaker recognition (respond to only the owner's voice)
