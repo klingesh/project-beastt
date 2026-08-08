@@ -279,6 +279,46 @@ class Assistant:
         self.memory.add_assistant(reply)
         return reply
 
+    # --- working through a request in steps -------------------------------
+    def _should_deliberate(self, text: str) -> bool:
+        if not getattr(self.config, "deliberate", False):
+            return False
+        from . import deliberate
+
+        return deliberate.wanted(text, bool(getattr(self, "_attachment_text", "")))
+
+    def _deliberate(self, text: str) -> Iterator[dict]:
+        """Understand, plan and work through a request, reporting each stage.
+
+        Attachments and remembered facts are handed over as context, so the plan
+        is made knowing what material is already available -- that is what stops
+        it searching the web for a document the user just uploaded.
+        """
+        from . import deliberate
+
+        context_parts = []
+        attached = getattr(self, "_attachment_text", "")
+        if attached:
+            names = ", ".join(getattr(self, "_attachment_names", [])) or "a file"
+            context_parts.append(
+                f"Files attached to this conversation ({names}) -- their text "
+                f"follows, so do not search for it:\n{attached[:6000]}"
+            )
+        if self.longterm is not None and len(self.longterm):
+            facts = self.longterm.relevant(text, limit=self.config.memory_recall_limit)
+            if facts:
+                context_parts.append("Things you remember about "
+                                     f"{self.config.user_name}:\n"
+                                     + "\n".join(f"- {f}" for f in facts))
+
+        return deliberate.work(
+            self.brain, text,
+            user_name=self.config.user_name,
+            context="\n\n".join(context_parts),
+            searcher=self.search,
+            max_results=self.config.search_max_results,
+        )
+
     def _emit_status(self, message: str) -> None:
         """Report a step from inside a skill, when someone is streaming."""
         sink = self._status_sink
@@ -350,6 +390,26 @@ class Assistant:
             return
 
         self.memory.add_user(text)
+
+        # A substantial request is worked through in steps rather than answered
+        # in one breath. Chatty or short messages skip this entirely.
+        if self._should_deliberate(text):
+            answered = None
+            for event in self._deliberate(text):
+                if event.get("type") == "answer":
+                    answered = event["text"]
+                elif event.get("type") == "give_up":
+                    answered = None
+                    break
+                else:
+                    yield event
+            if answered:
+                self.memory.add_assistant(answered)
+                yield {"type": "chunk", "text": answered}
+                yield {"type": "done", "reply": answered}
+                return
+            # Planning didn't work out; fall through to a plain reply.
+
         messages = self._context_for(text)
         if self.search is not None and needs_search(text):
             yield {"type": "status", "text": f"Searching the web for “{extract_query(text)}”"}
