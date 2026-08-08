@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .base import Skill
+from .intent import directive
 
 _READ = re.compile(
     r"\b(?:read|open|summari[sz]e|summary\s+of|tell\s+me\s+about|what(?:'s|\s+is)\s+in|"
@@ -74,9 +75,12 @@ class ReadSkill(Skill):
 
     # --- routing ----------------------------------------------------------
     def matches(self, text: str) -> bool:
-        if _LIST_DOCS.search(text) and (_IN_REPO.search(text) or "repo" in text.lower()):
+        if directive(_LIST_DOCS, text) and (_IN_REPO.search(text)
+                                            or "repo" in text.lower()):
             return True
-        if not _READ.search(text):
+        # Reading fetches from a repository, so the ask has to be the request
+        # rather than a filename mentioned inside pasted material.
+        if not directive(_READ, text):
             return False
         # Needs something document-ish to act on, or it would swallow ordinary
         # requests like "tell me about solar power".

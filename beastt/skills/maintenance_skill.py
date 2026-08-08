@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 
 from .base import Skill
+from .intent import directive
 
 _DIAGNOSE = re.compile(
     r"\b(?:health\s*check|check\s+(?:yourself|your\s+health|everything|your\s+setup)|"
@@ -25,8 +26,12 @@ _DIAGNOSE = re.compile(
     r"is\s+everything\s+(?:ok|okay|working|fine)|run\s+diagnostics?)\b",
     re.IGNORECASE,
 )
+#: "resolve" is deliberately absent. It is the weakest synonym for "fix" and it
+#: collides with a product name: any message mentioning DaVinci Resolve matched
+#: and triggered a self-repair. The gap between verb and object is bounded for
+#: the same reason -- across an unbounded run of words, almost anything pairs up.
 _REPAIR = re.compile(
-    r"\b(?:fix|repair|heal|mend|sort\s+out|resolve)\b[^.?!]*"
+    r"\b(?:fix|repair|heal|mend|sort\s+out)\b[^.?!]{0,40}?"
     r"\b(?:yourself|your\s+self|it|issues?|problems?|errors?|everything|that)\b"
     r"|^\s*(?:fix|repair|heal)\s*[.!]?\s*$",
     re.IGNORECASE,
@@ -67,15 +72,20 @@ class MaintenanceSkill(Skill):
         self._last_findings = None
 
     def matches(self, text: str) -> bool:
+        # These repair the installation and can pull models or roll back code,
+        # so the trigger must be the request rather than a phrase inside
+        # something pasted. "I checked everything and there's nothing to fix"
+        # was the answer to a DaVinci Resolve grading spec.
         return bool(
-            _CLEAR_ERRORS.search(text)
-            or _ERRORS.search(text)
-            or _DIAGNOSE.search(text)
-            or _REPAIR.search(text)
-            or _UPDATE_MODEL.search(text)
-            or _CHECK_UPDATE.search(text)
-            or _DO_UPDATE.search(text)
-            or (_ROLLBACK.search(text) and re.search(r"\bupdate|version\b", text, re.I))
+            directive(_CLEAR_ERRORS, text)
+            or directive(_ERRORS, text)
+            or directive(_DIAGNOSE, text)
+            or directive(_REPAIR, text)
+            or directive(_UPDATE_MODEL, text)
+            or directive(_CHECK_UPDATE, text)
+            or directive(_DO_UPDATE, text)
+            or (directive(_ROLLBACK, text)
+                and re.search(r"\bupdate|version\b", text, re.I))
         )
 
     def run(self, text: str) -> str:

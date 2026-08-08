@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 
 from .base import Skill
+from .intent import directive
 
 _REMEMBER = re.compile(
     r"^\s*(?:hey\s+[a-z]{4,10}[,\s]+)?(?:please\s+)?remember\s+(?:that\s+|this[:,]\s*|about\s+me\s+that\s+)?(.+)",
@@ -38,9 +39,12 @@ class MemorySkill(Skill):
         self.user_name = user_name
 
     def matches(self, text: str) -> bool:
+        # _REMEMBER and _FORGET are anchored, so they are already safe.
+        # _FORGET_ALL erases everything JARVIS knows about you -- that must
+        # never fire because the words appeared inside a pasted document.
         return bool(
-            _FORGET_ALL.search(text)
-            or _RECALL.search(text)
+            directive(_FORGET_ALL, text)
+            or directive(_RECALL, text)
             or _REMEMBER.match(text)
             or _FORGET.match(text)
         )
