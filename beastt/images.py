@@ -150,3 +150,83 @@ class ImageFinder:
             licence=f"CC {item.get('license', '')} {item.get('license_version', '')}".strip(),
             source_url=str(item.get("foreign_landing_url") or item.get("url") or "")[:120],
         )
+
+
+
+class PictureSource:
+    """One place a slide asks for a picture, however it has to be obtained.
+
+    Photographs first, generated artwork second. That order is deliberate: a
+    real photograph of a real subject is more credible than an invented one, and
+    Openverse answers in a second where Flux takes tens of them. Generation
+    exists to cover what photography cannot -- "the three phases of an AI
+    rollout" has never been photographed, and that slide used to fall back to an
+    abstract shape.
+
+    Set BEASTT_IMAGE_PREFER=generated to reverse it, which suits a deck about
+    concepts rather than places.
+
+    Exposes the same `find()` and `credits` as ImageFinder, so the renderers do
+    not need to know which happened.
+    """
+
+    def __init__(self, config=None, verbose: bool = False):
+        from .config import Config
+
+        self.config = config or Config.load()
+        self.verbose = verbose
+
+        self.finder: Optional[ImageFinder] = None
+        if getattr(self.config, "images_enabled", False):
+            self.finder = ImageFinder(enabled=True)
+
+        self.maker = None
+        if getattr(self.config, "imagegen_enabled", False):
+            from .imagegen import ImageMaker
+
+            self.maker = ImageMaker(self.config, verbose=verbose)
+
+        self.prefer = str(getattr(self.config, "image_prefer", "photo") or "photo").lower()
+
+    @property
+    def enabled(self) -> bool:
+        return self.finder is not None or self.maker is not None
+
+    def _photo(self, query: str, orientation: str) -> Optional[Picture]:
+        if self.finder is None:
+            return None
+        return self.finder.find(query, orientation=orientation)
+
+    def _generated(self, query: str, orientation: str) -> Optional[Picture]:
+        if self.maker is None:
+            return None
+        return self.maker.make(query, orientation=orientation)
+
+    def find(self, query: str, orientation: str = "wide") -> Optional[Picture]:
+        order = ((self._generated, self._photo) if self.prefer == "generated"
+                 else (self._photo, self._generated))
+        for attempt in order:
+            try:
+                picture = attempt(query, orientation)
+            except Exception as exc:
+                if self.verbose:
+                    print(f"[images] {attempt.__name__} failed: "
+                          f"{exc.__class__.__name__}: {exc}")
+                continue
+            if picture is not None:
+                return picture
+        return None
+
+    @property
+    def credits(self) -> List[Picture]:
+        """Every picture used, in the order it was used.
+
+        Generated images appear here too, licensed "AI-generated" -- the credits
+        slide is exactly where a reader should learn which images were invented.
+        """
+        collected: List[Picture] = []
+        if self.finder is not None:
+            collected.extend(self.finder.credits)
+        if self.maker is not None:
+            collected.extend(self.maker.credits)
+        return collected

@@ -389,18 +389,19 @@ class Workshop:
                         "\"rename the title to X\"."
                     )
 
-        # 3. Re-render, fetching images if any slide asks for them.
+        # 3. Re-render, fetching or generating images if any slide asks for them.
         finder = None
         if self.kind == "presentation":
             from .config import Config
-            from .images import ImageFinder
+            from .images import PictureSource
 
             wants_images = any(
                 str(s.get("layout", "")).lower() in ("image", "photo", "picture")
                 for s in (self.spec.get("slides") or [])
             )
-            if wants_images and Config.load().images_enabled:
-                finder = ImageFinder(enabled=True)
+            if wants_images:
+                source = PictureSource(Config.load())
+                finder = source if source.enabled else None
 
         try:
             self.path = build(self.kind, self.spec, theme_name=self.theme, finder=finder)
