@@ -27,6 +27,7 @@ import hashlib
 import random
 import re
 import urllib.parse
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,11 +53,21 @@ SIZES: Dict[str, Tuple[int, int]] = {
     "tall": (768, 1024),
 }
 
-#: Flux renders text as convincing gibberish, which looks worse on a slide than
-#: no text at all. Ruling it out in the prompt is the only control we have.
-STYLE = ("professional editorial illustration, clean uncluttered composition, "
-         "restrained muted palette, soft studio lighting, high detail, "
-         "no text, no words, no letters, no captions, no watermark, no logo")
+#: Fallback direction for when a prompt cannot be expanded (see expand_prompt).
+#:
+#: The previous version read "professional editorial illustration, clean
+#: uncluttered composition, restrained muted palette, soft studio lighting, high
+#: detail, no text, no words, no letters, no captions, no watermark, no logo" --
+#: about twenty-five words of style against a one-word subject like
+#: "advertisements". Flux obeyed the style and ignored the subject, and the
+#: instruction it followed most faithfully was to leave things out: every image
+#: came back as an empty grey room with a blank frame on the wall.
+#:
+#: Two lessons are baked in here. Keep it shorter than the subject deserves to be,
+#: and prefer concrete photographic direction over adjectives about restraint,
+#: which a diffusion model renders as emptiness.
+STYLE = ("detailed photograph, natural light, realistic textures, "
+         "shallow depth of field")
 
 
 class GenerationError(RuntimeError):
@@ -177,7 +188,10 @@ def catalogue(config: Config) -> List[Dict]:
 # --- prompt shaping ---------------------------------------------------------
 #: The only part of the house style worth forcing on a prompt someone wrote
 #: themselves. Flux inventing lettering ruins an image whatever the art direction.
-MINIMAL_STYLE = "no text, no words, no letters, no watermark, no logo"
+#: Kept short on purpose. A long list of "no X" phrases in a positive prompt --
+#: which is all this API accepts -- pushes the model towards blankness rather than
+#: away from lettering.
+MINIMAL_STYLE = "no lettering"
 
 #: Past this length a request carries its own art direction, and ours would argue
 #: with it. A user asking for "photorealistic ... DSLR photography,
@@ -185,6 +199,60 @@ MINIMAL_STYLE = "no text, no words, no letters, no watermark, no logo"
 #: bolted on -- those are contradictory instructions, and the model splits the
 #: difference into something that is neither.
 DETAILED_PROMPT = 180
+
+
+#: Below this, a request is a topic rather than a picture and is worth expanding.
+BRIEF_PROMPT = 120
+
+_EXPAND = """You write prompts for an image generator.
+
+Turn this request into ONE vivid image prompt: {subject}
+
+Rules:
+- 50 to 80 words. A single paragraph, no line breaks, no bullet points.
+- Describe a concrete scene: what is in frame, where it is, the time of day, the
+  light, the camera angle, the colours, and the medium (photograph, oil painting,
+  3D render, watercolour).
+- Decide the specifics the request leaves open. "advertisements" must become one
+  particular scene -- a billboard over a wet street at dusk, a designer's desk
+  mid-layout -- never a list of advertising concepts.
+- Describe only what can be seen. No abstract nouns like innovation or strategy,
+  and nothing that would require words, signs or logos to be readable.
+- Reply with the prompt only. No preamble, no quotes, no explanation."""
+
+
+def expand_prompt(brain, subject: str) -> str:
+    """Turn a bare topic into a scene worth rendering, or "" if that fails.
+
+    This is the difference between the two images in the bug report. "marketing"
+    plus generic style words gave Flux nothing to draw, so it drew nothing: a
+    blank frame in an empty room. A model asked to invent the scene first --
+    where, when, what light, what medium -- gives it something to hold on to.
+
+    It costs one extra call, which is the same trade the deck planner makes and
+    for the same reason: deciding what to make before making it.
+    """
+    if brain is None:
+        return ""
+    try:
+        from .brain.base import Message
+
+        reply = brain.reply(
+            [Message(role="user", content=_EXPAND.format(subject=subject))],
+            temperature=0.9,
+        )
+    except Exception as exc:
+        print(f"[imagegen] couldn't expand the prompt ({exc.__class__.__name__})")
+        return ""
+
+    text = " ".join(str(reply or "").split())
+    # Models like to introduce their work; strip a leading "Here is ...:" and any
+    # wrapping quotes before trusting it.
+    text = re.sub(r"^(?:here(?:'s| is)[^:]{0,40}:)\s*", "", text, flags=re.I)
+    text = text.strip("\"'` ")
+    if len(text) < 40 or len(text) > 900:
+        return ""
+    return text
 
 
 def build_prompt(subject: str, style: str = STYLE) -> str:
@@ -241,13 +309,27 @@ def pollinations_generate(config: Config, prompt: str, width: int, height: int,
     if key:
         headers["Authorization"] = f"Bearer {key}"
 
+    # A seed is not optional. Without one the service is deterministic, so asking
+    # for the same thing twice returns byte-identical images -- four requests for
+    # "advertisements" produced the same picture four times over. The seed is what
+    # makes "try again" mean anything.
+    seed = str(random.randint(1, 10_000_000))
+
     attempts: List[Tuple[str, Dict[str, str]]] = []
     if key:
         attempts.append((f"{POLLINATIONS_GATEWAY}/{encoded}", {
             "model": model, "width": str(width), "height": str(height),
-            "nologo": "true", "seed": str(random.randint(1, 10_000_000)),
+            "nologo": "true", "seed": seed,
         }))
     else:
+        # The gateway rejects a seed and a non-square shape from anonymous
+        # callers; the original host accepts both. So without a key, go there
+        # first and get a varying image at the requested aspect ratio, rather
+        # than a repeatable square. The gateway is kept as the fallback.
+        attempts.append((f"{POLLINATIONS_DIRECT}/{encoded}", {
+            "model": model, "width": str(width), "height": str(height),
+            "nologo": "true", "seed": seed,
+        }))
         side = max(width, height)
         attempts.append((f"{POLLINATIONS_GATEWAY}/{encoded}", {
             "model": model, "width": str(side), "height": str(side),
@@ -356,18 +438,26 @@ class ImageMaker:
     def backends(self) -> List[Generator]:
         return available(self.config) if self.enabled else []
 
-    def make(self, subject: str, orientation: str = "wide") -> Optional[Picture]:
-        """Generate an image for `subject`, or None if that isn't possible."""
+    def make(self, subject: str, orientation: str = "wide", prompt: str = "",
+             fresh: bool = False) -> Optional[Picture]:
+        """Generate an image for `subject`, or None if that isn't possible.
+
+        Pass `prompt` to send something other than the subject -- an expanded
+        scene description, say. Pass `fresh` when a repeat request should produce
+        a different picture: the cache exists so one deck doesn't fetch the same
+        artwork twice, but a person asking again wants a new attempt, not the
+        previous file handed back.
+        """
         if not self.enabled or self.exhausted:
             return None
-        prompt = build_prompt(subject)
+        prompt = " ".join(str(prompt or "").split()) or build_prompt(subject)
         if not prompt:
             return None
 
         width, height = SIZES.get(orientation, SIZES["wide"])
         cache_key = hashlib.sha1(
             f"{prompt}|{width}x{height}".encode("utf-8")).hexdigest()[:16]
-        if cache_key in self._made:
+        if not fresh and cache_key in self._made:
             return self._made[cache_key]
 
         backends = self.backends()
@@ -391,7 +481,11 @@ class ImageMaker:
                 reasons.append(f"{generator.label}: {exc.__class__.__name__}")
                 continue
 
-            target = cache_dir() / f"gen-{cache_key}{_suffix(data)}"
+            # A fresh attempt needs its own filename. Reusing the prompt-hashed
+            # one meant the second attempt silently overwrote the first, so
+            # "again" replaced the picture instead of offering an alternative.
+            unique = f"-{uuid.uuid4().hex[:6]}" if fresh else ""
+            target = cache_dir() / f"gen-{cache_key}{unique}{_suffix(data)}"
             try:
                 target.write_bytes(data)
             except Exception as exc:
