@@ -47,6 +47,7 @@ _UA = {"User-Agent": "beastt-assistant/1.0 (personal assistant)"}
 #: see the Pollinations note below.
 SIZES: Dict[str, Tuple[int, int]] = {
     "wide": (1280, 720),
+    "classic": (1024, 768),
     "square": (1024, 1024),
     "tall": (768, 1024),
 }
@@ -174,12 +175,31 @@ def catalogue(config: Config) -> List[Dict]:
 
 
 # --- prompt shaping ---------------------------------------------------------
+#: The only part of the house style worth forcing on a prompt someone wrote
+#: themselves. Flux inventing lettering ruins an image whatever the art direction.
+MINIMAL_STYLE = "no text, no words, no letters, no watermark, no logo"
+
+#: Past this length a request carries its own art direction, and ours would argue
+#: with it. A user asking for "photorealistic ... DSLR photography,
+#: documentary-style realism" does not want "professional editorial illustration"
+#: bolted on -- those are contradictory instructions, and the model splits the
+#: difference into something that is neither.
+DETAILED_PROMPT = 180
+
+
 def build_prompt(subject: str, style: str = STYLE) -> str:
-    """Turn a slide's image query into something worth sending to Flux."""
+    """Turn an image request into something worth sending to Flux.
+
+    Short subjects ("marketing", "renewable energy") get the house style, because
+    two words are not art direction and the default would otherwise be whatever
+    Flux feels like. Long ones are left as written, apart from the no-text rule.
+    """
     cleaned = re.sub(r"\s+", " ", str(subject or "")).strip(" .,-")
     cleaned = re.sub(r"^(a|an|the)\s+", "", cleaned, flags=re.IGNORECASE)
     if not cleaned:
         return ""
+    if len(cleaned) >= DETAILED_PROMPT:
+        return f"{cleaned}, {MINIMAL_STYLE}"
     return f"{cleaned}, {style}" if style else cleaned
 
 
@@ -251,7 +271,15 @@ def pollinations_generate(config: Config, prompt: str, width: int, height: int,
         data = resp.content or b""
         if _valid_image(data):
             return data
-        last = "reply was not an image"
+        # Say what did come back. A rate-limited free tier answers with an error
+        # page or a stub, and "not an image" alone leaves nobody any wiser.
+        kind = ""
+        try:
+            kind = str(resp.headers.get("Content-Type") or "")
+        except Exception:
+            pass
+        last = (f"reply was not a usable image ({len(data)} bytes"
+                + (f", {kind}" if kind else "") + ")")
     raise GenerationError(last or "no image returned")
 
 

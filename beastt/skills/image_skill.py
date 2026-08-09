@@ -32,26 +32,40 @@ _ASK = re.compile(
     rf"(?:\s+(?:me|us))?"
     rf"(?:\s+(?:a|an|some|the))?"
     rf"[^.\n]{{0,24}}?"
-    rf"\b(?:{_NOUNS})\b"
+    rf"\b(?P<noun>{_NOUNS})\b"
     rf"(?:\s+(?:of|on|about|showing|depicting|for|with|that\s+shows|featuring))?"
     r"\s*(?P<subject>[^\n]*)",
     re.IGNORECASE,
 )
 
-#: A request that mentions a document is a document request that happens to
-#: mention pictures. "Make a presentation with images about solar" belongs to
-#: DocumentSkill, and matching it here would quietly replace a deck with a JPEG.
-_DOCUMENT = re.compile(
-    r"\b(presentation|powerpoint|power\s*point|ppt|pptx|slide|slides|deck|"
-    r"document|word\s+file|docx|report|spreadsheet|excel|xlsx|essay)\b",
+_DOCUMENT_NOUNS = (r"presentation|powerpoint|power\s*point|ppt|pptx|slides?|"
+                   r"deck|document|word\s+file|docx|report|spreadsheet|excel|"
+                   r"xlsx|essay")
+
+#: A document request that happens to mention pictures is still a document
+#: request -- but only when a verb actually governs the document noun.
+#:
+#: Merely looking for the word was too blunt and broke a real request: an image
+#: prompt ending "leave clean negative space on one side for adding presentation
+#: text" was rejected as a deck, so a carefully written art brief went to the
+#: model, which replied with a JSON plan instead of a picture. "presentation
+#: text" is not a request for a presentation.
+_DOCUMENT_REQUEST = re.compile(
+    rf"\b(?:{_VERBS}|prepare|write|build|put\s+together)\b"
+    rf"(?:\s+(?:me|us))?"
+    rf"(?:\s+(?:a|an|some|the|another))?"
+    rf"[^.\n]{{0,24}}?"
+    rf"\b(?P<noun>{_DOCUMENT_NOUNS})\b",
     re.IGNORECASE,
 )
 
-#: Aspect ratio, taken from the word the user chose rather than guessed.
+#: Aspect ratio, taken from what the user actually asked for rather than guessed.
 _WIDE = re.compile(r"\b(wallpaper|banner|landscape|wide|header|cover|"
-                   r"background|16\s*[:x]\s*9)\b", re.IGNORECASE)
+                   r"background|16\s*[:x]\s*9|3\s*[:x]\s*2)\b", re.IGNORECASE)
 _TALL = re.compile(r"\b(poster|portrait|tall|vertical|story|reel|"
-                   r"9\s*[:x]\s*16)\b", re.IGNORECASE)
+                   r"9\s*[:x]\s*16|3\s*[:x]\s*4|2\s*[:x]\s*3)\b", re.IGNORECASE)
+#: 4:3 is neither 16:9 nor square, and someone who names it means it.
+_CLASSIC = re.compile(r"\b4\s*[:x]\s*3\b", re.IGNORECASE)
 
 #: Trailing politeness that is not part of the subject.
 _TRAILING = re.compile(
@@ -70,14 +84,22 @@ def _subject(text: str) -> str:
     # "resources" style tails are fine; a bare preposition left over is not.
     raw = re.sub(r"^(?:of|on|about|for|with|showing|depicting)\s+", "", raw,
                  flags=re.IGNORECASE)
-    return " ".join(raw.split())[:300]
+    # Generous, because a considered art brief is long and every clause of it
+    # matters. An earlier 300-character cap silently discarded the second half of
+    # one -- including the "DSLR photography, documentary-style realism" that was
+    # the whole point of it. Pollinations accepts about 1500 characters.
+    return " ".join(raw.split())[:1200]
 
 
 def orientation_for(text: str) -> str:
-    if _WIDE.search(text or ""):
-        return "wide"
-    if _TALL.search(text or ""):
+    body = text or ""
+    # An explicit ratio beats a noun: "a 4:3 poster" is 4:3.
+    if _CLASSIC.search(body):
+        return "classic"
+    if _TALL.search(body):
         return "tall"
+    if _WIDE.search(body):
+        return "wide"
     # Square by default: it is the shape anonymous Pollinations reliably
     # returns, and it sits well in a chat bubble.
     return "square"
@@ -102,9 +124,19 @@ class ImageSkill(Skill):
         if not getattr(self.config, "imagegen_enabled", False):
             return False
         body = text or ""
-        if _DOCUMENT.search(body):
+        asked = directive(_ASK, body)
+        if asked is None:
             return False
-        return directive(_ASK, body) is not None
+        # Compare where the *nouns* are, not where the matches begin. Both
+        # patterns start at the same verb in "generate an image with space for
+        # presentation text", so comparing match starts handed that to
+        # DocumentSkill. The noun the verb reaches first is the thing being asked
+        # for: "image" at 12 beats "presentation" at 33, and in "make a
+        # presentation with images" it is the other way round.
+        document = _DOCUMENT_REQUEST.search(body)
+        if document is not None and document.start("noun") < asked.start("noun"):
+            return False
+        return True
 
     def run(self, text: str) -> str:
         from ..imagegen import ImageMaker, art_dir, available, save_as_art
@@ -143,9 +175,33 @@ class ImageSkill(Skill):
 
         # Markdown so the chat can render it inline; the path so it can be found
         # on disk; the attribution so nobody mistakes it for a photograph.
-        return (
-            f"Here's \"{subject}\":\n\n"
-            f"![{subject}](/api/art/{saved.path.name})\n\n"
-            f"AI-generated with {saved.creator}, so it isn't a photograph.\n"
-            f"Saved to {saved.path}"
-        )
+        lines = [
+            f"Here's \"{subject}\":",
+            "",
+            f"![{subject}](/api/art/{saved.path.name})",
+            "",
+            f"AI-generated with {saved.creator}, so it isn't a photograph.",
+        ]
+        shape = self._shape_caveat(orientation, saved)
+        if shape:
+            lines.append(shape)
+        lines.append(f"Saved to {saved.path}")
+        return "\n".join(lines)
+
+    def _shape_caveat(self, orientation: str, saved) -> str:
+        """Own up when the requested shape could not be delivered.
+
+        Anonymous Pollinations rejects non-square requests, so asking for 4:3 and
+        silently receiving 1:1 would look like the instruction was ignored. Say
+        which it is, and how to lift the restriction.
+        """
+        if orientation == "square":
+            return ""
+        if "Pollinations" not in (saved.creator or ""):
+            return ""
+        if str(getattr(self.config, "pollinations_key", "") or ""):
+            return ""
+        return ("Note: it's square — Pollinations only returns square images "
+                "without a key. Add BEASTT_POLLINATIONS_KEY to your .env for "
+                "other shapes, or BEASTT_CF_ACCOUNT/BEASTT_CF_TOKEN to use "
+                "Cloudflare instead.")
