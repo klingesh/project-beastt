@@ -258,9 +258,11 @@ class Assistant:
         #    search first if the question needs current information.
         self.memory.add_user(text)
         messages = self._context_for(text)
-        series = self._data_series(text)
+        series, data_problem = self._data_attempt(text)
         if series:
             messages = self._augment_with_data(series, messages)
+        elif data_problem:
+            messages = self._augment_with_data_gap(data_problem, messages)
         if self._should_search(text, series):
             messages = self._augment_with_search(text, messages)
 
@@ -415,12 +417,18 @@ class Assistant:
             # Planning didn't work out; fall through to a plain reply.
 
         messages = self._context_for(text)
-        series = self._data_series(text)
+        series, data_problem = self._data_attempt(text)
         if series:
             from . import data
 
             yield {"type": "status", "text": f"Looking up {data.describe(series)}"}
             messages = self._augment_with_data(series, messages)
+        elif data_problem:
+            # Say it on screen. A failed lookup used to be invisible, which is
+            # how an invented figure got to pass itself off as a fetched one.
+            yield {"type": "status",
+                   "text": f"Couldn't fetch that figure — {data_problem}"}
+            messages = self._augment_with_data_gap(data_problem, messages)
         if self._should_search(text, series):
             yield {"type": "status", "text": f"Searching the web for “{extract_query(text)}”"}
             messages = self._augment_with_search(text, messages)
@@ -484,28 +492,41 @@ class Assistant:
         yield {"type": "done", "reply": reply}
 
     # --- published figures ------------------------------------------------
-    def _data_series(self, text: str):
-        """Statistics this question should be answered with, or [].
+    def _data_attempt(self, text: str):
+        """(series, problem): the figures for this question, or why there are none.
 
         Asked about inflation or GDP, a model answers from training data --
         confidently, without a source, and out of date. Fetching the published
         series instead replaces a guess with a citation.
+
+        Returning the *reason* matters as much as returning the data. An earlier
+        version swallowed every failure and returned an empty list, so when the
+        World Bank was unreachable the model answered from memory and described
+        that as having "just pulled up the latest data". A wrong number is bad; a
+        wrong number wearing the costume of a real one is worse, because there is
+        nothing in the reply to doubt.
+
+        The empty problem string is reserved for "this was never a data question",
+        which is the only case that should pass silently.
         """
         if not getattr(self.config, "data_enabled", True):
-            return []
+            return [], ""
         try:
             from . import data
 
             if not data.wanted(self.config, text):
-                return []
-            series = data.lookup(self.config, text)
+                return [], ""
+            problems: List[str] = []
+            series = data.lookup(self.config, text, problems=problems)
         except Exception as exc:
+            print(f"[data] lookup failed: {exc.__class__.__name__}: {exc}")
+            return [], f"the lookup itself failed ({exc.__class__.__name__})"
+
+        if series:
             if self._verbose:
-                print(f"[data] lookup failed: {exc.__class__.__name__}: {exc}")
-            return []
-        if series and self._verbose:
-            print(f"[data] {data.describe(series)}")
-        return series
+                print(f"[data] {data.describe(series)}")
+            return series, ""
+        return [], (problems[0] if problems else "the source returned nothing")
 
     def _augment_with_data(self, series, messages):
         from . import data
@@ -514,6 +535,13 @@ class Assistant:
         if not block:
             return messages
         return [*messages, Message(role="system", content=block)]
+
+    def _augment_with_data_gap(self, reason: str, messages):
+        """Tell the model it has no figures, so it cannot pretend otherwise."""
+        from . import data
+
+        note = data.no_data_prompt(reason, self.config.user_name)
+        return [*messages, Message(role="system", content=note)]
 
     def _should_search(self, text: str, series) -> bool:
         """Whether to search as well, given what the data sources returned.

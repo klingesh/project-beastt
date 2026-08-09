@@ -233,19 +233,26 @@ def _do_search(searcher, query: str, max_results: int) -> str:
         return ""
 
 
-def _do_data(config, query: str) -> str:
-    """Published figures as a finding, or "" if this step wasn't a data question."""
+def _do_data(config, query: str):
+    """(findings, problem) for a data step.
+
+    The two empty-handed cases are not the same and must not be reported the
+    same. "No statistical agency publishes this" is a normal outcome that a web
+    search can rescue; "the World Bank did not answer" is a fault the user should
+    hear about, because the number that follows will have come from memory.
+    """
     if config is None or not getattr(config, "data_enabled", True):
-        return ""
+        return "", ""
     try:
         from . import data
 
-        series = data.lookup(config, query)
-        if not series:
-            return ""
-        return "\n\n".join(s.as_text() for s in series)[:1600]
-    except Exception:
-        return ""
+        problems = []
+        series = data.lookup(config, query, problems=problems)
+        if series:
+            return "\n\n".join(s.as_text() for s in series)[:1600], ""
+        return "", (problems[0] if problems else "")
+    except Exception as exc:
+        return "", f"the lookup failed ({exc.__class__.__name__})"
 
 
 def work(brain: Brain, request: str, user_name: str = "friend",
@@ -280,13 +287,15 @@ def work(brain: Brain, request: str, user_name: str = "friend",
         # reasoning about. Each fallback is announced so the trail stays honest.
         if action == "data":
             yield {"type": "status", "text": f"Step {index}: looking up {label}"}
-            block = _do_data(config, step["detail"])
+            block, problem = _do_data(config, step["detail"])
             if block:
                 findings.append(f"{index}. Looked up \"{label}\":\n{block}")
                 continue
             action = "search"
             yield {"type": "status",
-                   "text": f"Step {index}: not a published series, searching instead"}
+                   "text": (f"Step {index}: {problem}, searching instead"
+                            if problem else
+                            f"Step {index}: not a published series, searching instead")}
         elif action == "search":
             yield {"type": "status", "text": f"Step {index}: searching for {label}"}
         else:
