@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sys
 from pathlib import Path
 
 from .assistant import Assistant
@@ -244,6 +245,23 @@ def _chat_session(assistant: Assistant, config: Config, tts, stt) -> None:
 
 
 # --- standby / wake word ---------------------------------------------------
+def _can_prompt() -> bool:
+    """Is there a keyboard to ask a question at?
+
+    The autostart service runs under `pythonw.exe`, which has no console at all:
+    `sys.stdin` is None and `input()` raises RuntimeError("lost sys.stdin"). That
+    took the whole service down every single time the wake word was heard, so it
+    crash-looped on the one thing it exists to do.
+
+    A piped stdin is still usable -- `input()` works and raises EOFError at the
+    end, which callers already handle -- so this deliberately does not require a
+    terminal. It only asks whether stdin exists at all.
+    """
+    if os.environ.get("BEASTT_HEADLESS") == "1":
+        return False
+    return getattr(sys, "stdin", None) is not None
+
+
 def _ask_mode(config: Config, tts, wake_stt) -> str:
     """Ask the user whether they want voice or text. Returns 'voice' or 'text'."""
     from .wake import parse_mode_choice
@@ -276,9 +294,24 @@ def _ask_mode(config: Config, tts, wake_stt) -> str:
             if tts:
                 tts.say(nudge)
 
+    if not _can_prompt():
+        # Running as the background service: there is no keyboard to fall back
+        # to. Voice is the right default rather than an arbitrary one -- we got
+        # here because the wake word was heard, so speech demonstrably works.
+        print("[wake] No console to type at; carrying on by voice.")
+        spoken = "I didn't catch that, so let's talk by voice."
+        if tts:
+            tts.say(spoken)
+        return "voice"
+
     try:
         typed = input("Type 'v' for voice or 't' for text [v]: ").strip()
     except (EOFError, KeyboardInterrupt):
+        return "voice"
+    except (RuntimeError, OSError, ValueError) as exc:
+        # stdin can also disappear mid-run (a closed console, a redirect that
+        # went away). Asking a question must never be what ends the session.
+        print(f"[wake] Couldn't read the keyboard ({exc}); carrying on by voice.")
         return "voice"
     return parse_mode_choice(typed) or "voice"
 
