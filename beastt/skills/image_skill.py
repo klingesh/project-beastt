@@ -108,10 +108,14 @@ def orientation_for(text: str) -> str:
 class ImageSkill(Skill):
     name = "image"
 
-    def __init__(self, config, on_created=None, progress=None):
+    def __init__(self, config, on_created=None, progress=None,
+                 brain_provider=None):
         self.config = config
         self._on_created = on_created
         self._progress_sink = progress
+        #: Used to expand a bare topic into a scene. Optional: without it, short
+        #: requests still work, they are just less interesting.
+        self._brain_provider = brain_provider
 
     def _progress(self, message: str) -> None:
         if self._progress_sink:
@@ -138,6 +142,23 @@ class ImageSkill(Skill):
             return False
         return True
 
+    def _expanded(self, subject: str) -> str:
+        """A scene description for a bare topic, or "" to use the subject as-is.
+
+        Only for short requests. Someone who wrote a paragraph of art direction
+        has already done this, and rewriting it would discard their choices.
+        """
+        from ..imagegen import BRIEF_PROMPT, expand_prompt
+
+        if len(subject) >= BRIEF_PROMPT or self._brain_provider is None:
+            return ""
+        try:
+            brain = self._brain_provider()
+        except Exception:
+            return ""
+        self._progress("Deciding what the picture should show...")
+        return expand_prompt(brain, subject)
+
     def run(self, text: str) -> str:
         from ..imagegen import ImageMaker, art_dir, available, save_as_art
 
@@ -152,10 +173,13 @@ class ImageSkill(Skill):
                     "BEASTT_CF_ACCOUNT and BEASTT_CF_TOKEN for Cloudflare.")
 
         orientation = orientation_for(text)
-        self._progress(f"Drawing \"{subject[:60]}\"...")
+        scene = self._expanded(subject)
+        self._progress(f"Drawing \"{(scene or subject)[:70]}\"...")
 
         maker = ImageMaker(self.config, verbose=True)
-        picture = maker.make(subject, orientation=orientation)
+        # fresh=True: asking twice should give two pictures, not the same one.
+        picture = maker.make(subject, orientation=orientation, prompt=scene,
+                             fresh=True)
         if picture is None:
             return (f"I tried to draw \"{subject}\" but the image service "
                     "wouldn't answer. Worth another go in a minute -- the free "
@@ -182,6 +206,13 @@ class ImageSkill(Skill):
             "",
             f"AI-generated with {saved.creator}, so it isn't a photograph.",
         ]
+        if scene:
+            # Show the scene it invented. Without this the only way to steer a
+            # disappointing result is guesswork, and a one-word request gives no
+            # clue which of the choices was the assistant's rather than yours.
+            lines.append(f"I drew it as: {scene}")
+            lines.append("Say \"again\" for a different take, or describe the "
+                         "scene yourself to take control of it.")
         shape = self._shape_caveat(orientation, saved)
         if shape:
             lines.append(shape)

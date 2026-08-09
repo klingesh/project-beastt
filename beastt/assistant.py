@@ -128,6 +128,7 @@ class Assistant:
                     self.config,
                     on_created=self._remember_document,
                     progress=self._emit_status,
+                    brain_provider=lambda: self.brain,
                 ),
             )
 
