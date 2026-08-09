@@ -115,6 +115,22 @@ class Assistant:
         self.last_document = None
         # Set by the CLI when input is coming from the microphone.
         self.voice_mode = False
+
+        # Drawing a picture on request. Inserted before the document skills so
+        # that they end up ahead of it: "a presentation with images" is a deck,
+        # and whichever skill is checked first decides that.
+        if getattr(self.config, "imagegen_enabled", False):
+            from .skills.image_skill import ImageSkill
+
+            self.skills.insert(
+                0,
+                ImageSkill(
+                    self.config,
+                    on_created=self._remember_document,
+                    progress=self._emit_status,
+                ),
+            )
+
         if self.config.documents_enabled:
             from .skills.document_skill import DocumentSkill
             from .skills.github_skill import GitHubSkill

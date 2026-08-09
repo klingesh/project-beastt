@@ -28,6 +28,7 @@ import random
 import re
 import urllib.parse
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -35,6 +36,7 @@ import requests
 
 from .config import Config
 from .images import Picture, cache_dir
+from .paths import project_root
 
 TIMEOUT = 90          # Flux on a free tier is not fast.
 _MIN_BYTES = 4_000
@@ -58,6 +60,38 @@ STYLE = ("professional editorial illustration, clean uncluttered composition, "
 
 class GenerationError(RuntimeError):
     """A backend was tried and could not produce an image."""
+
+
+def art_dir() -> Path:
+    """Where images a person actually asked for are kept.
+
+    Distinct from the slide cache on purpose. The cache is keyed by prompt hash
+    and is disposable; this holds files someone will want to find, open and send
+    to somebody, so the names are readable and nothing here is ever pruned.
+    """
+    path = project_root() / "beastt_output" / "art"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _slug(text: str, limit: int = 48) -> str:
+    cleaned = re.sub(r"[^\w\s-]", "", str(text or "")).strip().lower()
+    cleaned = re.sub(r"[\s_]+", "-", cleaned)
+    return (cleaned[:limit].strip("-") or "artwork")
+
+
+def save_as_art(picture: Picture, subject: str) -> Picture:
+    """Copy a generated picture into the art folder under a readable name."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = art_dir() / f"{_slug(subject)}-{stamp}{picture.path.suffix}"
+    target.write_bytes(picture.path.read_bytes())
+    return Picture(
+        path=target,
+        title=picture.title,
+        creator=picture.creator,
+        licence=picture.licence,
+        source_url=picture.source_url,
+    )
 
 
 @dataclass(frozen=True)
