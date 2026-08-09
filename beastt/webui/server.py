@@ -14,6 +14,7 @@ import base64
 import binascii
 import json
 import mimetypes
+import re
 import threading
 import time
 import webbrowser
@@ -21,7 +22,7 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .. import providers
 from ..assistant import Assistant
@@ -188,6 +189,28 @@ class Handler(BaseHTTPRequestHandler):
         kind = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         self._send(200, target.read_bytes(), kind)
 
+    def _art(self, name: str):
+        """Serve a generated image so the chat can show it inline.
+
+        A filename, never a path. Everything outside [A-Za-z0-9._-] is stripped,
+        which removes separators outright -- so no arrangement of dots and slashes
+        can climb out of the folder. The resolved path is then checked against the
+        folder anyway, because one guard on a file server is not enough.
+        """
+        from ..imagegen import art_dir
+
+        safe = re.sub(r"[^A-Za-z0-9._-]", "", unquote(name or ""))
+        if not safe or safe.startswith("."):
+            return self._json({"error": "bad image name"}, 400)
+
+        folder = art_dir().resolve()
+        target = (folder / safe).resolve()
+        if folder not in target.parents or not target.is_file():
+            return self._json({"error": "no such image"}, 404)
+
+        kind = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        self._send(200, target.read_bytes(), kind)
+
     # --- routes -----------------------------------------------------------
     def do_GET(self):
         path = urlparse(self.path).path
@@ -196,6 +219,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._static("index.html")
         if path.startswith("/static/"):
             return self._static(path[len("/static/"):])
+        if path.startswith("/api/art/"):
+            return self._art(path[len("/api/art/"):])
 
         if path == "/api/status":
             config = self.state.config

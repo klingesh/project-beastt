@@ -70,6 +70,13 @@
       (_m, _lang, code) => `<pre><code>${code.replace(/\n$/, "")}</code></pre>`);
     out = out.replace(/`([^`\n]+)`/g, "<code>$1</code>");
     out = out.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    /* Generated artwork, shown inline. The source is restricted to /api/art/
+       plus a plain filename -- nothing else becomes an <img>. A reply is model
+       output, so an unrestricted src here would let it point the browser
+       anywhere or smuggle in an onerror handler. Must run before the link rule,
+       which would otherwise eat the URL out of the middle. */
+    out = out.replace(/!\[([^\]\n]*)\]\((\/api\/art\/[A-Za-z0-9._-]+)\)/g,
+      (_m, alt, src) => `<img class="art" src="${src}" alt="${alt}" loading="lazy">`);
     out = out.replace(/(https?:\/\/[^\s<]+)/g,
       '<a href="$1" target="_blank" rel="noopener">$1</a>');
     return out;
