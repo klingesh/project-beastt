@@ -234,11 +234,18 @@ class DocumentSkill(Skill):
 
         theme = _resolve_theme(spec, config.doc_theme)
         finder = None
-        if kind == "presentation" and config.images_enabled:
-            from ..images import ImageFinder
+        if kind == "presentation":
+            from ..images import PictureSource
 
-            finder = ImageFinder(enabled=True)
-            print("[docs] Looking for suitable images...")
+            source = PictureSource(config)
+            if source.enabled:
+                finder = source
+                note = ("Looking for photos" if source.finder is not None
+                        else "Generating artwork")
+                if source.finder is not None and source.maker is not None:
+                    note = "Looking for photos, generating what I can't find"
+                self._progress(f"{note}...")
+                print(f"[docs] {note}...")
 
         try:
             path = build(kind, spec, theme_name=theme, finder=finder)
