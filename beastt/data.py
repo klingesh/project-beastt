@@ -25,6 +25,7 @@ do with it, and the prompt built by `as_prompt` says so.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -33,11 +34,29 @@ import requests
 
 from .config import Config
 
-#: Data calls should be quick or not happen. Nothing here is worth a long stall.
-TIMEOUT = 15
+#: The World Bank's gateway is genuinely slow and intermittently returns 502.
+#: 15 seconds was too tight in practice and produced ReadTimeouts on a healthy
+#: connection, so the answer came from the model's memory instead.
+TIMEOUT = 30
+#: Statuses worth trying again. A 502/503/504 from a gateway says "ask me again",
+#: not "this data does not exist", and giving up on the first one is how a
+#: perfectly good question ended up answered from training data.
+_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+#: Two retries, briefly spaced. Enough to ride out a blip; short enough that a
+#: genuinely dead source doesn't hold up the reply.
+_ATTEMPTS = 3
+_BACKOFF = 1.5
 #: How much history to pull. Enough for a year-on-year comparison and a trend.
 DEFAULT_POINTS = 24
 _UA = "JARVIS/1.0 (personal assistant; +https://github.com/klingesh/project-beastt)"
+
+
+#: Answers already fetched this session, so a flaky free API is asked once rather
+#: than once per question. Ten minutes is safe: nothing here updates faster than
+#: daily, and a deck that mentions the same series on four slides should not make
+#: four requests for it.
+CACHE_TTL = 600
+_CACHE: Dict[str, Tuple[float, object]] = {}
 
 
 class DataError(RuntimeError):
@@ -116,9 +135,25 @@ class Series:
 
 
 def _fmt(value: float) -> str:
-    if value == int(value) and abs(value) < 1e15:
+    """Readable, without pretending to a precision nobody asked for.
+
+    A raw World Bank GDP figure is 3956067115771.63, and a model handed that will
+    read it out in full: "3,956,067,115,771.63 US dollars". "3.96 trillion" is the
+    same fact in a form a person can actually use.
+
+    The magnitude words deliberately start at a million, which keeps them away
+    from series whose units already carry a scale. FRED's GDP series is quoted in
+    billions of dollars and sits around 29,000 -- rewriting that as "29 thousand"
+    would be wrong, and this threshold means it never happens.
+    """
+    magnitude = abs(value)
+    for size, word in ((1e12, "trillion"), (1e9, "billion"), (1e6, "million")):
+        if magnitude >= size:
+            scaled = f"{value / size:,.2f}".rstrip("0").rstrip(".")
+            return f"{scaled} {word}"
+    if value == int(value) and magnitude < 1e15:
         return f"{int(value):,}"
-    if abs(value) >= 1000:
+    if magnitude >= 1000:
         return f"{value:,.2f}"
     return f"{value:.4g}"
 
@@ -218,26 +253,62 @@ def catalogue(config: Config) -> List[Dict]:
 
 
 # --- HTTP -------------------------------------------------------------------
-def _get_json(url: str, params: Dict[str, str], timeout: int = TIMEOUT):
-    try:
-        resp = requests.get(url, params=params, timeout=timeout,
-                            headers={"User-Agent": _UA})
-    except Exception as exc:
-        raise DataError(f"could not reach {url} ({exc.__class__.__name__})")
-    if resp.status_code >= 400:
-        detail = ""
+def _get_json(url: str, params: Dict[str, str], timeout: int = TIMEOUT,
+              attempts: int = _ATTEMPTS):
+    """GET some JSON, retrying the failures that are worth retrying.
+
+    Observed in the wild: two consecutive 502s from api.worldbank.org followed by
+    a successful request minutes later, for an identical URL. Treating the first
+    failure as final meant the assistant fell back to remembered figures for a
+    question the source could perfectly well answer.
+
+    A 4xx other than 429 is not retried -- a bad indicator code will be just as
+    bad the second time, and retrying it only makes the user wait.
+    """
+    key = url + "?" + "&".join(f"{k}={params[k]}" for k in sorted(params))
+    hit = _CACHE.get(key)
+    if hit is not None and (time.time() - hit[0]) < CACHE_TTL:
+        return hit[1]
+
+    last = "unknown error"
+    for attempt in range(1, max(1, attempts) + 1):
+        retryable = False
         try:
-            body = resp.json()
-            if isinstance(body, dict):
-                detail = str(body.get("error_message") or "")
-        except Exception:
-            pass
-        raise DataError(f"HTTP {resp.status_code}{': ' + detail if detail else ''}")
-    try:
-        return resp.json()
-    except Exception:
-        # Almost always means file_type/format was dropped and we got XML back.
-        raise DataError("reply was not JSON")
+            resp = requests.get(url, params=params, timeout=timeout,
+                                headers={"User-Agent": _UA})
+        except Exception as exc:
+            # Timeouts and dropped connections are exactly the transient class.
+            last = f"could not reach {url} ({exc.__class__.__name__})"
+            retryable = True
+        else:
+            if resp.status_code in _RETRY_STATUS:
+                last = f"HTTP {resp.status_code}"
+                retryable = True
+            elif resp.status_code >= 400:
+                detail = ""
+                try:
+                    body = resp.json()
+                    if isinstance(body, dict):
+                        detail = str(body.get("error_message") or "")
+                except Exception:
+                    pass
+                raise DataError(
+                    f"HTTP {resp.status_code}{': ' + detail if detail else ''}")
+            else:
+                try:
+                    payload = resp.json()
+                except Exception:
+                    # Almost always means file_type/format was dropped and we
+                    # got XML back. Retrying will not change that.
+                    raise DataError("reply was not JSON")
+                _CACHE[key] = (time.time(), payload)
+                return payload
+
+        if retryable and attempt < attempts:
+            print(f"[data] {last}; retrying ({attempt + 1} of {attempts})")
+            time.sleep(_BACKOFF * attempt)
+
+    raise DataError(f"{last} after {attempts} attempts")
 
 
 # --- FRED -------------------------------------------------------------------
