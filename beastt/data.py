@@ -606,18 +606,33 @@ def wanted(config: Config, text: str) -> bool:
 
 
 def lookup(config: Config, text: str, points: int = DEFAULT_POINTS,
-           max_series: int = 3) -> List[Series]:
-    """Fetch whatever a question asks for. Empty list if nothing applies."""
+           max_series: int = 3,
+           problems: Optional[List[str]] = None) -> List[Series]:
+    """Fetch whatever a question asks for. Empty list if nothing applies.
+
+    Pass a list as `problems` to find out *why* the list came back empty. That
+    distinction matters: "this was never a data question" and "the World Bank was
+    unreachable" look identical to the caller otherwise, and the second one has to
+    be told to the user rather than quietly ignored.
+    """
     ask = resolve(config, text)
     if ask is None:
         return []
-    return fetch_ask(config, ask, points=points, max_series=max_series)
+    return fetch_ask(config, ask, points=points, max_series=max_series,
+                     problems=problems)
 
 
 def fetch_ask(config: Config, ask: Ask, points: int = DEFAULT_POINTS,
-              max_series: int = 3) -> List[Series]:
-    """Carry out a resolved ask. Failures are dropped, never raised."""
+              max_series: int = 3,
+              problems: Optional[List[str]] = None) -> List[Series]:
+    """Carry out a resolved ask. Failures are reported, never raised."""
     series: List[Series] = []
+
+    def note(message: str) -> None:
+        print(f"[data] {message}")
+        if problems is not None:
+            problems.append(message)
+
     if ask.source_id == "fred":
         try:
             result = fred_fetch(
@@ -629,12 +644,15 @@ def fetch_ask(config: Config, ask: Ask, points: int = DEFAULT_POINTS,
             )
             if result:
                 series.append(result)
+            else:
+                note(f"FRED {ask.spec.get('series_id')}: no observations returned")
         except DataError as exc:
-            print(f"[data] FRED {ask.spec.get('series_id')}: {exc}")
+            note(f"FRED {ask.spec.get('series_id')}: {exc}")
         return series
 
     indicator = ask.spec.get("indicator", "")
     if not indicator:
+        note("no indicator to fetch")
         return series
     for country in (ask.countries or ["WLD"])[:max_series]:
         try:
@@ -647,9 +665,31 @@ def fetch_ask(config: Config, ask: Ask, points: int = DEFAULT_POINTS,
             )
             if result:
                 series.append(result)
+            else:
+                note(f"World Bank {indicator}/{country}: no values published yet")
         except DataError as exc:
-            print(f"[data] World Bank {indicator}/{country}: {exc}")
+            note(f"World Bank {indicator}/{country}: {exc}")
     return series
+
+
+def no_data_prompt(reason: str, user_name: str = "the user") -> str:
+    """Context for the model when a lookup was warranted but produced nothing.
+
+    Without this the model answers from training data and then describes it as
+    having "pulled the latest figures" -- a claim the reader has no way to check.
+    An undated number honestly labelled is far more use than a fresh-sounding lie.
+    """
+    return (
+        "DATA LOOKUP FAILED\n"
+        f"A figure was expected for this question and could not be fetched: {reason}\n"
+        "You therefore have NO live data in front of you.\n"
+        "- Do not say you looked anything up, pulled data, checked the latest "
+        "figures, or ran a search. You did not, and "
+        f"{user_name} has no way to tell that you didn't.\n"
+        "- If you give a number at all, say plainly that it is from memory, give "
+        "the year you believe it refers to, and say it may be out of date.\n"
+        "- Say the source could not be reached and offer to try again."
+    )
 
 
 def describe(series: Sequence[Series]) -> str:
