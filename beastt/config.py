@@ -107,6 +107,12 @@ class Config:
     # Running shell commands. Off by default: it is the riskiest capability here.
     shell_enabled: bool = _get("BEASTT_SHELL", "off").lower() in ("on", "true", "1", "yes")
 
+    # Published data (economic figures from the institutions that publish them,
+    # instead of whatever the model half-remembers). World Bank needs no key and
+    # works immediately; FRED wants a free one for US monthly/daily series.
+    data_enabled: bool = _get("BEASTT_DATA", "on").lower() in ("on", "true", "1", "yes")
+    fred_key: str = _get("BEASTT_FRED_KEY", "")
+
     # Web search
     search_enabled: bool = _get("BEASTT_SEARCH", "on").lower() in ("on", "true", "1", "yes")
     #: Work substantial requests through in steps -- understand, plan, then do
