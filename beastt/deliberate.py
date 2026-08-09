@@ -77,6 +77,7 @@ The request:
 Return ONLY valid JSON:
 {{"understanding": "one or two sentences restating the task in your own words, naming what you have been given to work with",
   "steps": [
+    {{"action": "data", "detail": "the economic indicator and country, e.g. 'India GDP growth'", "why": "what this establishes"}},
     {{"action": "search", "detail": "the exact search query", "why": "what this establishes"}},
     {{"action": "reason", "detail": "the specific question to work out", "why": "what this establishes"}}
   ]}}
@@ -84,9 +85,14 @@ Return ONLY valid JSON:
 Rules:
 - Between 2 and {max_steps} steps. Every step must change the final answer;
   drop anything that is merely restating the task.
-- Use "search" only for facts you cannot be confident about -- current events,
-  prices, recent figures, anything dated. Use "reason" for analysis, comparison,
-  judgement, or working with material already provided.
+- Use "data" for published economic statistics -- inflation, GDP, unemployment,
+  interest rates, yields, population, trade, foreign investment -- for any
+  country. These come from FRED and the World Bank with a citation, so prefer
+  "data" over "search" whenever the figure is a national statistic.
+- Use "search" for facts a statistical agency would not publish: news, company
+  announcements, prices of individual shares, opinion, anything very recent.
+- Use "reason" for analysis, comparison, judgement, or working with material
+  already provided.
 - If the request includes the material to work from, do NOT search for it.
 - Order the steps so later ones can build on earlier ones.
 """
@@ -115,6 +121,9 @@ Write the reply to {user} in your own warm, natural voice. Rules:
   say so rather than inventing it.
 - Lead with the answer, then the reasoning that supports it.
 - Name a source or a figure where you have one.
+- Where a figure came from FRED or the World Bank, give its observation date and
+  name the publisher. Report what the data shows; do not recommend buying,
+  selling or holding anything, and do not forecast a price.
 - Do not describe your process or mention steps, searching, or planning --
   {user} watched it happen. Just give the answer.
 """
@@ -157,8 +166,14 @@ def _parse_plan(raw: str, max_steps: int) -> Optional[Dict]:
         if not detail:
             continue
         action = str(item.get("action") or "reason").strip().lower()
+        if action.startswith("search"):
+            action = "search"
+        elif action.startswith("data") or action.startswith("fetch"):
+            action = "data"
+        else:
+            action = "reason"
         steps.append({
-            "action": "search" if action.startswith("search") else "reason",
+            "action": action,
             "detail": detail,
             "why": " ".join(str(item.get("why") or "").split())[:200],
         })
@@ -202,9 +217,40 @@ def _run_step(brain: Brain, understanding: str, step: Dict,
         return ""
 
 
+def _do_search(searcher, query: str, max_results: int) -> str:
+    """Search results as a finding, or "" if nothing useful came back."""
+    if searcher is None:
+        return ""
+    try:
+        from .search import format_results
+
+        results = searcher.search(query, max_results) or []
+        # Gate on the results themselves: format_results() returns a readable
+        # "nothing found" line for an empty list, which would otherwise be
+        # recorded as though it were a finding.
+        return format_results(results)[:1200] if results else ""
+    except Exception:
+        return ""
+
+
+def _do_data(config, query: str) -> str:
+    """Published figures as a finding, or "" if this step wasn't a data question."""
+    if config is None or not getattr(config, "data_enabled", True):
+        return ""
+    try:
+        from . import data
+
+        series = data.lookup(config, query)
+        if not series:
+            return ""
+        return "\n\n".join(s.as_text() for s in series)[:1600]
+    except Exception:
+        return ""
+
+
 def work(brain: Brain, request: str, user_name: str = "friend",
          context: str = "", searcher=None,
-         max_results: int = 5) -> Iterator[dict]:
+         max_results: int = 5, config=None) -> Iterator[dict]:
     """Understand, plan, work, answer -- yielding progress as it happens.
 
     Yields {"type": "status", "text": ...} throughout and exactly one
@@ -227,27 +273,32 @@ def work(brain: Brain, request: str, user_name: str = "friend",
     findings: List[str] = []
     for index, step in enumerate(steps, 1):
         label = step["detail"][:80]
-        if step["action"] == "search" and searcher is not None:
-            yield {"type": "status", "text": f"Step {index}: searching for {label}"}
-            results, summary = [], ""
-            try:
-                from .search import format_results
+        action = step["action"]
 
-                results = searcher.search(step["detail"], max_results) or []
-                # Gate on the results themselves: format_results() returns a
-                # readable "nothing found" line for an empty list, which would
-                # otherwise be recorded as though it were a finding.
-                summary = format_results(results) if results else ""
-            except Exception:
-                results, summary = [], ""
-            if results and summary:
-                findings.append(f"{index}. Searched \"{label}\":\n{summary[:1200]}")
+        # A step can degrade: a figure the statistical agencies don't carry is
+        # worth searching for, and something nobody has published is still worth
+        # reasoning about. Each fallback is announced so the trail stays honest.
+        if action == "data":
+            yield {"type": "status", "text": f"Step {index}: looking up {label}"}
+            block = _do_data(config, step["detail"])
+            if block:
+                findings.append(f"{index}. Looked up \"{label}\":\n{block}")
                 continue
-            # Nothing came back -- fall through and reason about it instead.
+            action = "search"
             yield {"type": "status",
-                   "text": f"Step {index}: nothing useful found, reasoning instead"}
+                   "text": f"Step {index}: not a published series, searching instead"}
+        elif action == "search":
+            yield {"type": "status", "text": f"Step {index}: searching for {label}"}
         else:
             yield {"type": "status", "text": f"Step {index}: {label}"}
+
+        if action == "search":
+            summary = _do_search(searcher, step["detail"], max_results)
+            if summary:
+                findings.append(f"{index}. Searched \"{label}\":\n{summary}")
+                continue
+            yield {"type": "status",
+                   "text": f"Step {index}: nothing useful found, reasoning instead"}
 
         answer = _run_step(brain, understanding, step, findings)
         if answer:

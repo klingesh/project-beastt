@@ -10,6 +10,7 @@ JARVIS is a voice **and** text AI assistant that runs on a **free, local** langu
 - 💬 **Text, voice, or a browser chat UI** — type, talk, or open a proper chat window.
 - ❤️ **A real friend** — warm, witty personality that greets you and holds a genuine conversation.
 - 🌐 **Live web search** — asks about news, weather, or current events get real answers, summarized in its own voice.
+- 📊 **Real published data** — inflation, GDP, unemployment, rates and trade fetched from FRED and the World Bank, quoted with the observation date and a citation instead of recalled from training data.
 - 🎯 **Noise-robust listening** — ignores coughs, sips, and background clatter; reacts to actual speech.
 - 🔐 **Voice lock** — recognizes your voiceprint and ignores other people.
 - 🧵 **Memory** — remembers the flow of your chat within a session.
@@ -148,6 +149,59 @@ for when the model doesn't choose one.
 | ppt, powerpoint, presentation, slides, deck | `.pptx` with title slide, bullets, speaker notes |
 | word, document, report, essay | `.docx` with headings, paragraphs, bullet lists |
 | excel, spreadsheet, workbook | `.xlsx` with bold headers, typed cells, sized columns |
+
+## 📊 Real numbers, not remembered ones
+
+Ask a language model what US inflation is and it will tell you, confidently,
+with no source — from training data that is months or years old. You cannot tell
+from the answer that it is wrong.
+
+So JARVIS looks it up instead. Two publishers, both free:
+
+| Source | Covers | Key | Freshness |
+| --- | --- | --- | --- |
+| **World Bank** | Every country: GDP, inflation, unemployment, population, trade, FDI, debt, literacy, inequality | none needed | annual, lags a year or two |
+| **FRED** (St. Louis Fed) | US: CPI and PCE inflation, unemployment, payrolls, fed funds, Treasury yields, mortgage rates, oil, S&P 500, USD/INR | free | monthly to daily |
+
+The World Bank needs no key at all, so this works the moment you install JARVIS.
+For US figures, add a free FRED key:
+
+```
+BEASTT_FRED_KEY=your_key_here
+```
+
+Get one instantly at <https://fredaccount.stlouisfed.org/apikeys>.
+
+Then just ask:
+
+```
+You:    what is US inflation right now
+Jarvis: US CPI inflation was 2.4% year over year in June 2026, down from 2.9%
+        in April. That's FRED series CPIAUCSL — fred.stlouisfed.org/series/CPIAUCSL.
+```
+
+```
+You:    compare India and China GDP
+Jarvis: India's GDP was $3.91 trillion in 2024 against China's $18.74 trillion...
+        (World Bank, NY.GDP.MKTP.CD — note this is annual data, so 2025 isn't
+        published yet.)
+```
+
+Three things this deliberately does:
+
+- **Always gives the observation date.** A figure without its date is
+  misleading, especially for World Bank series that trail by a year or more.
+- **Skips the web search when it has the real series.** The top search results
+  for "US inflation" are blog posts quoting last year's number; putting those
+  next to the official series only invites the model to split the difference.
+  News questions still search, because a figure alone doesn't say what happened.
+- **Reports, and does not advise.** It will explain what the data shows. It will
+  not tell you to buy, sell or hold anything, and it will not forecast a price.
+
+Data lookups also work as a step inside the plan-then-work loop, so "analyse
+India's growth against its peers" fetches each series itself rather than guessing.
+
+Turn the whole thing off with `BEASTT_DATA=off`.
 
 ## 🐙 GitHub access
 
@@ -464,6 +518,8 @@ Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 | Speaking speed | `BEASTT_TTS_RATE` | `175` |
 | Whisper model | `BEASTT_STT_MODEL` | `base` (`small` is more accurate) |
 | Web search | `BEASTT_SEARCH` | `on` |
+| Published data | `BEASTT_DATA` | `on` |
+| FRED key (US data) | `BEASTT_FRED_KEY` | _(none — World Bank needs no key)_ |
 | Documents | `BEASTT_DOCUMENTS` | `on` |
 | GitHub token | `BEASTT_GITHUB_TOKEN` | (unset) |
 | Ask which repo | `BEASTT_GITHUB_ASK` | `on` |

@@ -258,7 +258,10 @@ class Assistant:
         #    search first if the question needs current information.
         self.memory.add_user(text)
         messages = self._context_for(text)
-        if self.search is not None and needs_search(text):
+        series = self._data_series(text)
+        if series:
+            messages = self._augment_with_data(series, messages)
+        if self._should_search(text, series):
             messages = self._augment_with_search(text, messages)
 
         try:
@@ -317,6 +320,7 @@ class Assistant:
             context="\n\n".join(context_parts),
             searcher=self.search,
             max_results=self.config.search_max_results,
+            config=self.config,
         )
 
     def _emit_status(self, message: str) -> None:
@@ -411,7 +415,13 @@ class Assistant:
             # Planning didn't work out; fall through to a plain reply.
 
         messages = self._context_for(text)
-        if self.search is not None and needs_search(text):
+        series = self._data_series(text)
+        if series:
+            from . import data
+
+            yield {"type": "status", "text": f"Looking up {data.describe(series)}"}
+            messages = self._augment_with_data(series, messages)
+        if self._should_search(text, series):
             yield {"type": "status", "text": f"Searching the web for “{extract_query(text)}”"}
             messages = self._augment_with_search(text, messages)
 
@@ -472,6 +482,51 @@ class Assistant:
 
         self.memory.add_assistant(reply)
         yield {"type": "done", "reply": reply}
+
+    # --- published figures ------------------------------------------------
+    def _data_series(self, text: str):
+        """Statistics this question should be answered with, or [].
+
+        Asked about inflation or GDP, a model answers from training data --
+        confidently, without a source, and out of date. Fetching the published
+        series instead replaces a guess with a citation.
+        """
+        if not getattr(self.config, "data_enabled", True):
+            return []
+        try:
+            from . import data
+
+            if not data.wanted(self.config, text):
+                return []
+            series = data.lookup(self.config, text)
+        except Exception as exc:
+            if self._verbose:
+                print(f"[data] lookup failed: {exc.__class__.__name__}: {exc}")
+            return []
+        if series and self._verbose:
+            print(f"[data] {data.describe(series)}")
+        return series
+
+    def _augment_with_data(self, series, messages):
+        from . import data
+
+        block = data.as_prompt(series)
+        if not block:
+            return messages
+        return [*messages, Message(role="system", content=block)]
+
+    def _should_search(self, text: str, series) -> bool:
+        """Whether to search as well, given what the data sources returned.
+
+        With an official figure in hand, a general web search is a liability
+        rather than a help: the top results for "US inflation" are blog posts
+        quoting last year's number, and putting those beside the real series
+        just invites the model to average them. News is the exception -- if the
+        question asks what is happening, the figure alone doesn't answer it.
+        """
+        if self.search is None or not needs_search(text):
+            return False
+        return not series or is_news(text)
 
     def _augment_with_search(self, text: str, messages):
         """Run a live web search and append the results as context for the brain."""

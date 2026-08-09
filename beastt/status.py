@@ -150,7 +150,24 @@ def report() -> None:
     mem = resolve(config.memory_path)
     print(f"[{_ok(mem.exists())}] Long-term memory file ({mem})")
 
-    # 7. Log tail
+    # 7. Data sources. Worth showing separately from the brain: these are what
+    #    decide whether an economic figure comes with a citation or is recalled
+    #    from the model's training data.
+    if getattr(config, "data_enabled", False):
+        try:
+            from . import data
+
+            for row in data.catalogue(config):
+                print(f"[{_ok(row['configured'])}] Data: {row['label']}")
+                if not row["configured"]:
+                    print(f"       Add {row['env_var']} to .env -- free key at "
+                          f"{row['signup']}")
+        except Exception as exc:
+            print(f"[NO ] Couldn't check data sources ({exc})")
+    else:
+        print("[   ] Published data off (BEASTT_DATA=off)")
+
+    # 8. Log tail
     log = log_file()
     print(f"\n--- last lines of {log} ---")
     if log.exists():
