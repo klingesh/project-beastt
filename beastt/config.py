@@ -94,6 +94,16 @@ class Config:
         "on", "true", "1", "yes")
     # Openly-licensed photos in presentations (attribution is added automatically).
     images_enabled: bool = _get("BEASTT_IMAGES", "on").lower() in ("on", "true", "1", "yes")
+    #: Generate artwork for slides no photograph can illustrate. Pollinations
+    #: needs nothing at all; Cloudflare is steadier once you add a token. Every
+    #: generated image is credited as AI-generated on the credits slide.
+    imagegen_enabled: bool = _get("BEASTT_IMAGE_GEN", "on").lower() in (
+        "on", "true", "1", "yes")
+    #: photo | generated -- which to try first when both are available.
+    image_prefer: str = _get("BEASTT_IMAGE_PREFER", "photo").lower()
+    pollinations_key: str = _get("BEASTT_POLLINATIONS_KEY", "")
+    cloudflare_account: str = _get("BEASTT_CF_ACCOUNT", "")
+    cloudflare_token: str = _get("BEASTT_CF_TOKEN", "")
 
     # GitHub access (push generated files, browse repos)
     github_token: str = _get("BEASTT_GITHUB_TOKEN", "")

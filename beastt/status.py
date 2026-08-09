@@ -167,6 +167,23 @@ def report() -> None:
     else:
         print("[   ] Published data off (BEASTT_DATA=off)")
 
+    # 7b. Image generation. Pollinations needs nothing, so this normally reads
+    #     OK on a fresh install -- worth showing so it is clear which backend a
+    #     slow deck is waiting on.
+    if getattr(config, "imagegen_enabled", False):
+        try:
+            from . import imagegen
+
+            for row in imagegen.catalogue(config):
+                print(f"[{_ok(row['configured'])}] Artwork: {row['label']}")
+                if not row["configured"] and row["env_vars"]:
+                    print(f"       Add {' and '.join(row['env_vars'])} to .env "
+                          f"-- {row['signup']}")
+        except Exception as exc:
+            print(f"[NO ] Couldn't check image generators ({exc})")
+    else:
+        print("[   ] Generated artwork off (BEASTT_IMAGE_GEN=off)")
+
     # 8. Log tail
     log = log_file()
     print(f"\n--- last lines of {log} ---")

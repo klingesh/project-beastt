@@ -11,6 +11,7 @@ JARVIS is a voice **and** text AI assistant that runs on a **free, local** langu
 - ❤️ **A real friend** — warm, witty personality that greets you and holds a genuine conversation.
 - 🌐 **Live web search** — asks about news, weather, or current events get real answers, summarized in its own voice.
 - 📊 **Real published data** — inflation, GDP, unemployment, rates and trade fetched from FRED and the World Bank, quoted with the observation date and a citation instead of recalled from training data.
+- 🎨 **Generates slide artwork** — Flux images for the slides no photograph can illustrate, always credited as AI-generated.
 - 🎯 **Noise-robust listening** — ignores coughs, sips, and background clatter; reacts to actual speech.
 - 🔐 **Voice lock** — recognizes your voiceprint and ignores other people.
 - 🧵 **Memory** — remembers the flow of your chat within a session.
@@ -303,6 +304,49 @@ these images use require that credit, so please keep it.
 Turn it off with `BEASTT_IMAGES=off`. If there's no network the deck still builds,
 using drawn graphics instead of photos.
 
+### 🎨 Generated artwork
+
+Photographs cover real subjects. Nobody has photographed *"the three phases of an
+AI rollout"* — and those slides used to fall back to an abstract shape, which is
+exactly where a deck starts to look plain.
+
+So JARVIS generates the picture instead:
+
+| Backend | Model | Setup | Allowance |
+| --- | --- | --- | --- |
+| **Pollinations** | Flux | **nothing at all** | free, no signup |
+| **Cloudflare Workers AI** | FLUX-1-schnell | account id + token | ~170 images/day free |
+
+Pollinations needs no key, so this works on a fresh install. Cloudflare is
+steadier once configured and is tried first when it is:
+
+```
+BEASTT_CF_ACCOUNT=your_account_id
+BEASTT_CF_TOKEN=your_token
+```
+
+Token from <https://dash.cloudflare.com/profile/api-tokens> with Workers AI access.
+
+**Photos are tried first, generation second.** A real photograph of a real
+storefront is more credible than an invented one, and Openverse answers in a
+second where Flux takes tens of them. Flip it with `BEASTT_IMAGE_PREFER=generated`
+for a deck about concepts rather than places.
+
+**Every generated image is credited as AI-generated** on the same credits slide
+as the photographs, attributed to the model that made it. A deck should never
+pass invented imagery off as a photograph.
+
+Two details worth knowing:
+
+- The prompt explicitly forbids text in the image. Flux renders convincing
+  gibberish, which looks worse on a slide than no text at all.
+- Anonymous Pollinations requests are documented to reject a seed and any
+  non-square aspect ratio, so without a key JARVIS asks for a square and lets
+  the renderer crop, then falls back to the older endpoint if the gateway still
+  refuses. Adding `BEASTT_POLLINATIONS_KEY` lifts both restrictions.
+
+Turn it off with `BEASTT_IMAGE_GEN=off`.
+
 ## 🔤 Typography
 
 Presentations use clean sans-serif faces chosen to suit the subject.
@@ -520,6 +564,9 @@ Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 | Web search | `BEASTT_SEARCH` | `on` |
 | Published data | `BEASTT_DATA` | `on` |
 | FRED key (US data) | `BEASTT_FRED_KEY` | _(none — World Bank needs no key)_ |
+| Generated artwork | `BEASTT_IMAGE_GEN` | `on` |
+| Photos or artwork first | `BEASTT_IMAGE_PREFER` | `photo` |
+| Cloudflare artwork | `BEASTT_CF_ACCOUNT`, `BEASTT_CF_TOKEN` | _(none — Pollinations needs no key)_ |
 | Documents | `BEASTT_DOCUMENTS` | `on` |
 | GitHub token | `BEASTT_GITHUB_TOKEN` | (unset) |
 | Ask which repo | `BEASTT_GITHUB_ASK` | `on` |
