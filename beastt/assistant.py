@@ -151,14 +151,20 @@ class Assistant:
                 0, GitHubSkill(self.config, last_file_provider=lambda: self.last_document)
             )
 
+        # Looking after itself: diagnose, repair, and update.
+        self.skills.insert(0, MaintenanceSkill(self.config))
+
         # Watching the trading bot, if one is configured. Read-only.
+        #
+        # Inserted last, so it is checked FIRST. Its patterns all require an
+        # explicit reference to the bot or to trades, which makes it the more
+        # specific of the two: MaintenanceSkill matches a bare "any updates?",
+        # and so answered "any update on my bot" with BEASTT's own git revision.
+        # Specific before general.
         if getattr(self.config, "bot_status_repo", ""):
             from .skills.trading_skill import TradingBotSkill
 
             self.skills.insert(0, TradingBotSkill(self.config))
-
-        # Looking after itself: diagnose, repair, and update.
-        self.skills.insert(0, MaintenanceSkill(self.config))
 
         # Reading documents out of repositories (or locally).
         if self.config.documents_enabled:

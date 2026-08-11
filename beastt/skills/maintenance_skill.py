@@ -22,7 +22,9 @@ from .base import Skill
 _DIAGNOSE = re.compile(
     r"\b(?:health\s*check|check\s+(?:yourself|your\s+health|everything|your\s+setup)|"
     r"diagnose|self[\s-]?check|are\s+you\s+(?:ok|okay|healthy|working|alright)|"
-    r"is\s+everything\s+(?:ok|okay|working|fine)|run\s+diagnostics?)\b",
+    # "run a diagnostic" is at least as natural as "run diagnostics", and the
+    # missing article was enough to send it to the model instead.
+    r"is\s+everything\s+(?:ok|okay|working|fine)|run\s+(?:a\s+)?diagnostics?)\b",
     re.IGNORECASE,
 )
 _REPAIR = re.compile(
@@ -32,7 +34,10 @@ _REPAIR = re.compile(
     re.IGNORECASE,
 )
 _ERRORS = re.compile(
-    r"\b(?:what\s+went\s+wrong|show\s+(?:me\s+)?(?:your\s+)?(?:errors?|logs?|failures?)|"
+    # "what's wrong" was missing alongside "what went wrong" -- the present tense
+    # is the one someone actually types when something is wrong now.
+    r"\b(?:what\s+went\s+wrong|what(?:'?s| is)\s+wrong|"
+    r"show\s+(?:me\s+)?(?:your\s+)?(?:errors?|logs?|failures?)|"
     r"any\s+errors?|last\s+error|recent\s+errors?|error\s+log)\b",
     re.IGNORECASE,
 )
@@ -42,7 +47,11 @@ _CLEAR_ERRORS = re.compile(
 )
 _CHECK_UPDATE = re.compile(
     r"\b(?:are\s+you\s+up\s*[\s-]?to[\s-]?date|check\s+for\s+updates?|"
-    r"any\s+updates?|is\s+there\s+(?:an\s+)?update|new\s+version)\b",
+    # "any updates?" on its own asks about BEASTT. "any update ON my bot" asks
+    # about something else entirely, and used to be answered with BEASTT's own
+    # git revision -- a confident reply to a question nobody asked.
+    r"any\s+updates?\b(?!\s+(?:on|for|about|to|regarding|from|with)\b)|"
+    r"is\s+there\s+(?:an\s+)?update|new\s+version)\b",
     re.IGNORECASE,
 )
 _DO_UPDATE = re.compile(
