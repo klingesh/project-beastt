@@ -134,6 +134,15 @@ class Config:
     #: heartbeat is written every 60s but only published every 300s, so a healthy
     #: bot legitimately looks five minutes old from here.
     bot_stale_minutes: int = int(_get("BEASTT_BOT_STALE_MINUTES", "15"))
+    #: Interrupt me when the bot is in trouble, rather than only when I ask.
+    #: Needs the background service running (--install-startup).
+    bot_alerts: bool = _get("BEASTT_BOT_ALERTS", "on").lower() in (
+        "on", "true", "1", "yes")
+    bot_check_minutes: int = int(_get("BEASTT_BOT_CHECK_MINUTES", "5"))
+    #: How long before a problem that hasn't gone away is mentioned again. Hourly:
+    #: a kill switch at 3am should still be visible at breakfast, but repeating
+    #: every five minutes teaches its owner to dismiss notifications.
+    bot_remind_minutes: int = int(_get("BEASTT_BOT_REMIND_MINUTES", "60"))
 
     # Web search
     search_enabled: bool = _get("BEASTT_SEARCH", "on").lower() in ("on", "true", "1", "yes")
