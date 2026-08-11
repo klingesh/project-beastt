@@ -94,6 +94,16 @@ _WORDS_IN_IMAGE = re.compile(
     re.IGNORECASE,
 )
 
+#: A painterly medium is fine when requested. Left to itself the scene writer kept
+#: choosing "ultra-realistic 3D render" and "hyper-realistic oil painting", which
+#: is why the trading floor came back as a golden fog and the cornfield as a blur.
+_ASKED_SOFT = re.compile(
+    r"\b(painting|painted|watercolou?r|oil|sketch|drawing|drawn|illustration|"
+    r"illustrated|cartoon|anime|comic|render|3d|cgi|concept\s+art|artwork|"
+    r"poster\s+art)\b",
+    re.IGNORECASE,
+)
+
 #: Trailing politeness that is not part of the subject.
 _TRAILING = re.compile(
     r"\s*(?:please|for\s+me|thanks|thank\s+you|now|asap|quickly)\s*[.!?]*\s*$",
@@ -180,7 +190,7 @@ class ImageSkill(Skill):
             return False
         return True
 
-    def _expanded(self, subject: str) -> str:
+    def _expanded(self, subject: str, full: str = "") -> str:
         """A scene description for a bare topic, or "" to use the subject as-is.
 
         Only for short requests. Someone who wrote a paragraph of art direction
@@ -195,7 +205,11 @@ class ImageSkill(Skill):
         except Exception:
             return ""
         self._progress("Deciding what the picture should show...")
-        return expand_prompt(brain, subject)
+        # Test the whole request, not the extracted subject: "create an oil
+        # painting of a farm" leaves a subject of just "a farm", so checking that
+        # threw away the very medium the user had asked for.
+        return expand_prompt(brain, subject,
+                             allow_soft=_ASKED_SOFT.search(full) is not None)
 
     def run(self, text: str) -> str:
         from ..imagegen import ImageMaker, art_dir, available, save_as_art
@@ -211,7 +225,7 @@ class ImageSkill(Skill):
                     "BEASTT_CF_ACCOUNT and BEASTT_CF_TOKEN for Cloudflare.")
 
         orientation = orientation_for(text)
-        scene = self._expanded(subject)
+        scene = self._expanded(subject, full=text)
         self._progress(f"Drawing \"{(scene or subject)[:70]}\"...")
 
         maker = ImageMaker(self.config, verbose=True)
