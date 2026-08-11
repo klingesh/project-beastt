@@ -204,6 +204,17 @@ DETAILED_PROMPT = 180
 #: Below this, a request is a topic rather than a picture and is worth expanding.
 BRIEF_PROMPT = 120
 
+#: Deliberately example-free.
+#:
+#: An earlier version illustrated the point with "a billboard over a wet street at
+#: dusk". The model copied it: "advertisements" and "finance" both came back as a
+#: rain-slick neon street, and the billboard it dutifully included rendered as
+#: garbled lettering. One concrete example in a prompt like this stops being an
+#: illustration and becomes a template.
+#:
+#: So the guidance is structural instead. Say what a good answer contains, insist
+#: the setting come from the subject's own world, and rule out the things this
+#: generator cannot draw.
 _EXPAND = """You write prompts for an image generator.
 
 Turn this request into ONE vivid image prompt: {subject}
@@ -213,11 +224,17 @@ Rules:
 - Describe a concrete scene: what is in frame, where it is, the time of day, the
   light, the camera angle, the colours, and the medium (photograph, oil painting,
   3D render, watercolour).
-- Decide the specifics the request leaves open. "advertisements" must become one
-  particular scene -- a billboard over a wet street at dusk, a designer's desk
-  mid-layout -- never a list of advertising concepts.
-- Describe only what can be seen. No abstract nouns like innovation or strategy,
-  and nothing that would require words, signs or logos to be readable.
+- Set it somewhere the subject genuinely happens, and be specific about where.
+  A subject about money belongs in a dealing room, a bank hall or over a ledger;
+  one about farming belongs in a field. Do not relocate it somewhere merely
+  atmospheric.
+- Never a night-time neon city street unless the request actually asks for one.
+- Choose nothing whose whole point is writing on it: no billboards, signs,
+  posters, screens full of text, book covers, packaging or shopfront names. This
+  generator cannot form legible words, so anything like that arrives as gibberish
+  and ruins the picture.
+- Describe only what can be seen. No abstract nouns like innovation, strategy or
+  growth -- those are ideas, not things a camera can point at.
 - Reply with the prompt only. No preamble, no quotes, no explanation."""
 
 

@@ -67,6 +67,33 @@ _TALL = re.compile(r"\b(poster|portrait|tall|vertical|story|reel|"
 #: 4:3 is neither 16:9 nor square, and someone who names it means it.
 _CLASSIC = re.compile(r"\b4\s*[:x]\s*3\b", re.IGNORECASE)
 
+#: Requests whose whole point is readable words. Flux cannot form legible text --
+#: a logo request came back as a white blob, and a billboard scene rendered
+#: "AJLA". Producing one anyway and saying nothing wastes the user's time on
+#: something that was never going to work, so say it before drawing.
+_NEEDS_TEXT = re.compile(
+    r"\b(logo|wordmark|word\s*mark|monogram|brand\s*name|letterhead|"
+    r"business\s+card|name\s*plate|sign\s*board|signboard|billboard|"
+    r"certificate|invitation|menu|flyer|leaflet|brochure|infographic|"
+    r"typography|font|caption|subtitle|meme|comic\s+strip)\b",
+    re.IGNORECASE,
+)
+#: "a poster of a tiger" is fine; "a poster saying Grand Opening" is not.
+#:
+#: Some verbs settle it on their own -- nothing follows "saying" except words you
+#: expect to be able to read. Others need a text noun nearby, because "with" is
+#: far too common to act on by itself. "reading" is left out of the first group on
+#: purpose: a child reading a book is a picture, not a caption.
+_WORDS_IN_IMAGE = re.compile(
+    r"\b(?:saying|that\s+says|says|titled|spelling|spelled|labelled|labeled|"
+    r"written|inscribed)\b|"
+    r"\b(?:with|showing|containing|include[sd]?|add)\b[^.\n]{0,40}"
+    r"\b(?:text|words?|title|name|caption|slogan|tagline|heading|lettering|"
+    r"quote)\b|"
+    r"\b(?:write|spell|say|print)\b[^.\n]{0,20}\b(?:on|in)\s+it\b",
+    re.IGNORECASE,
+)
+
 #: Trailing politeness that is not part of the subject.
 _TRAILING = re.compile(
     r"\s*(?:please|for\s+me|thanks|thank\s+you|now|asap|quickly)\s*[.!?]*\s*$",
@@ -89,6 +116,17 @@ def _subject(text: str) -> str:
     # one -- including the "DSLR photography, documentary-style realism" that was
     # the whole point of it. Pollinations accepts about 1500 characters.
     return " ".join(raw.split())[:1200]
+
+
+def needs_lettering(text: str) -> bool:
+    """Does this request depend on words appearing in the picture?
+
+    Not a refusal -- a logo request still gets an image, and a mark without
+    wording is often a usable starting point. But it gets told, because a
+    silently unreadable result looks like a bug rather than a limit.
+    """
+    body = text or ""
+    return bool(_NEEDS_TEXT.search(body) or _WORDS_IN_IMAGE.search(body))
 
 
 def orientation_for(text: str) -> str:
@@ -206,6 +244,13 @@ class ImageSkill(Skill):
             "",
             f"AI-generated with {saved.creator}, so it isn't a photograph.",
         ]
+        if needs_lettering(text):
+            lines.append(
+                "Fair warning: this generator can't form readable words, so any "
+                "lettering will be nonsense. For something with a name on it, "
+                "treat this as the background and add the text yourself in "
+                "PowerPoint or Canva."
+            )
         if scene:
             # Show the scene it invented. Without this the only way to steer a
             # disappointing result is guesswork, and a one-word request gives no
