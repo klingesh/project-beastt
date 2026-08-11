@@ -184,6 +184,20 @@ def report() -> None:
     else:
         print("[   ] Generated artwork off (BEASTT_IMAGE_GEN=off)")
 
+    # 7c. The trading bot, if one is being watched.
+    if getattr(config, "bot_status_repo", ""):
+        try:
+            from . import trading
+
+            snapshot = trading.fetch_status(config)
+            health = trading.assess(config, snapshot)
+            ok = health.state == "running"
+            print(f"[{_ok(ok)}] Trading bot: {trading.one_line(config, snapshot)}")
+            for note in health.concerns:
+                print(f"       {note}")
+        except Exception as exc:
+            print(f"[NO ] Trading bot unreachable ({exc})")
+
     # 8. Log tail
     log = log_file()
     print(f"\n--- last lines of {log} ---")

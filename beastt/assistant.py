@@ -151,6 +151,12 @@ class Assistant:
                 0, GitHubSkill(self.config, last_file_provider=lambda: self.last_document)
             )
 
+        # Watching the trading bot, if one is configured. Read-only.
+        if getattr(self.config, "bot_status_repo", ""):
+            from .skills.trading_skill import TradingBotSkill
+
+            self.skills.insert(0, TradingBotSkill(self.config))
+
         # Looking after itself: diagnose, repair, and update.
         self.skills.insert(0, MaintenanceSkill(self.config))
 
