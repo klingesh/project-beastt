@@ -90,7 +90,10 @@ class Assistant:
         )
         self.skills = skills if skills is not None else default_skills(self.config)
         self.memory = Memory(
-            system_prompt=system_prompt(self.config.name, self.config.user_name),
+            system_prompt=system_prompt(
+                self.config.name, self.config.user_name,
+                can_draw=bool(getattr(self.config, "imagegen_enabled", False)),
+            ),
             max_messages=self.config.max_history_messages,
         )
         self.search = WebSearch() if self.config.search_enabled else None
