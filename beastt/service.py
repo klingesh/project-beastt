@@ -111,6 +111,16 @@ def run_service(config: Config) -> None:
     toast("BEASTT", f'Standby. Just call "{config.name}".')
     chime_ready()
 
+    # Watch the trading bot, if one is configured. A daemon thread, so it can
+    # never hold the service open on shutdown, and every check is wrapped -- a
+    # watcher that can take down the assistant is worse than no watcher.
+    try:
+        from .botwatch import start as start_botwatch
+
+        start_botwatch(config)
+    except Exception as exc:
+        print(f"[service] couldn't start the bot watcher ({exc})")
+
     # Imported here so logging is already redirected.
     from .cli import _run_standby
 

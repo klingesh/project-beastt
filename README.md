@@ -247,6 +247,35 @@ path is a bad idea however good the reporting around it gets. JARVIS also doesn'
 offer opinions on the positions it reports: stating that Brent is short and 2.80 up
 is a fact, while suggesting what to do about it would be investment advice.
 
+### Being told, rather than having to ask
+
+Asking only works if you think to ask. With the background service running, JARVIS
+checks every five minutes and interrupts you when something is wrong:
+
+```
+Trading bot HALTED — total drawdown 21.00% >= 20.00%. It will take no new
+entries until you clear it on the VPS.
+```
+
+```
+Trading bot is not reporting. Either it or the status publisher has stopped —
+check both windows on the VPS.
+```
+
+Three rules keep it from becoming noise you learn to dismiss:
+
+- **Alert on change, not on level.** A halt is announced when it starts, not every
+  time it's noticed.
+- **Remind slowly.** A kill switch that fires at 3am should still be visible at
+  breakfast, so it repeats hourly — not every five minutes.
+- **Say when it recovers.** `Trading bot is reporting normally again.` Otherwise the
+  last thing you were told is still bad news.
+
+It also mentions drawdown crossing three quarters of the kill-switch limit, and new
+errors, without treating them as emergencies.
+
+Turn it off with `BEASTT_BOT_ALERTS=off`.
+
 ### Knowing when it has stopped
 
 `BEASTT_BOT_STALE_MINUTES` (default 15) decides when a heartbeat counts as dead.
