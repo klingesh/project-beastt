@@ -123,6 +123,18 @@ class Config:
     data_enabled: bool = _get("BEASTT_DATA", "on").lower() in ("on", "true", "1", "yes")
     fred_key: str = _get("BEASTT_FRED_KEY", "")
 
+    # Watching a trading bot that runs elsewhere. The bot publishes status.json to
+    # a private repo; this reads it. Read-only -- BEASTT never places a trade.
+    bot_status_repo: str = _get("BEASTT_BOT_STATUS_REPO", "")
+    #: A read-only token for that repo. Falls back to BEASTT_GITHUB_TOKEN, which
+    #: only works if that token's access covers the status repository too.
+    bot_status_token: str = _get("BEASTT_BOT_STATUS_TOKEN", "")
+    bot_status_file: str = _get("BEASTT_BOT_STATUS_FILE", "status.json")
+    #: Must exceed the publisher's interval, not the bot's poll interval: the
+    #: heartbeat is written every 60s but only published every 300s, so a healthy
+    #: bot legitimately looks five minutes old from here.
+    bot_stale_minutes: int = int(_get("BEASTT_BOT_STALE_MINUTES", "15"))
+
     # Web search
     search_enabled: bool = _get("BEASTT_SEARCH", "on").lower() in ("on", "true", "1", "yes")
     #: Work substantial requests through in steps -- understand, plan, then do

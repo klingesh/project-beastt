@@ -11,6 +11,7 @@ JARVIS is a voice **and** text AI assistant that runs on a **free, local** langu
 - ❤️ **A real friend** — warm, witty personality that greets you and holds a genuine conversation.
 - 🌐 **Live web search** — asks about news, weather, or current events get real answers, summarized in its own voice.
 - 📊 **Real published data** — inflation, GDP, unemployment, rates and trade fetched from FRED and the World Bank, quoted with the observation date and a citation instead of recalled from training data.
+- 🤖 **Watches your trading bot** — read-only health, drawdown against its limits and open positions, for a bot running on another machine. It reports; it never trades.
 - 🎨 **Generates slide artwork** — Flux images for the slides no photograph can illustrate, always credited as AI-generated.
 - 🎯 **Noise-robust listening** — ignores coughs, sips, and background clatter; reacts to actual speech.
 - 🔐 **Voice lock** — recognizes your voiceprint and ignores other people.
@@ -203,6 +204,56 @@ Data lookups also work as a step inside the plan-then-work loop, so "analyse
 India's growth against its peers" fetches each series itself rather than guessing.
 
 Turn the whole thing off with `BEASTT_DATA=off`.
+
+## 🤖 Watching a trading bot
+
+If you run a trading bot on another machine, JARVIS can tell you how it's doing:
+
+```
+You:    how's my bot?
+Jarvis: Bot: RUNNING   (heartbeat 2 min ago)
+        Account 1100219238 — live orders
+        Equity 9,738.06 USD   balance 9,735.26
+        Drawdown 2.62% of 20.00% limit   (peak 10,000.00)
+        Today 0.00% of 6.00% limit
+        Open (1):
+          BRENT.ecn sell 0.04 lots @ 88.5   +2.80
+```
+
+The bot publishes a small `status.json` to a **private** GitHub repository; JARVIS
+reads it back. That avoids opening any port on the bot's machine, and the same file
+is readable from a phone.
+
+```
+BEASTT_BOT_STATUS_REPO=yourname/tradingbot-status
+BEASTT_BOT_STATUS_TOKEN=github_pat_readonly_token
+```
+
+Use a token with **Contents: Read** on that repository only — JARVIS never writes
+there.
+
+### It reports; it does not trade
+
+Ask it to close a position and it declines:
+
+```
+You:    close my brent position
+Jarvis: I only watch the bot — I can't place, close or change trades, and I'm not
+        going to be able to.
+```
+
+That is a deliberate limit, not a missing feature. A language model in the order
+path is a bad idea however good the reporting around it gets. JARVIS also doesn't
+offer opinions on the positions it reports: stating that Brent is short and 2.80 up
+is a fact, while suggesting what to do about it would be investment advice.
+
+### Knowing when it has stopped
+
+`BEASTT_BOT_STALE_MINUTES` (default 15) decides when a heartbeat counts as dead.
+It has to exceed the *publisher's* interval rather than the bot's poll interval —
+the heartbeat is written every 60 seconds but only published every 300, so a
+healthy bot legitimately looks a few minutes old. Set it too low and JARVIS cries
+wolf every few minutes, which trains you to ignore it.
 
 ## 🐙 GitHub access
 
