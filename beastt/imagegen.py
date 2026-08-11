@@ -230,15 +230,20 @@ Rules:
   atmospheric.
 - Never a night-time neon city street unless the request actually asks for one.
 - Choose nothing whose whole point is writing on it: no billboards, signs,
-  posters, screens full of text, book covers, packaging or shopfront names. This
-  generator cannot form legible words, so anything like that arrives as gibberish
-  and ruins the picture.
+  posters, screens full of text, book covers, packaging or shopfront names, and no
+  brand names at all. This generator cannot form legible words, so anything like
+  that arrives as gibberish and ruins the picture.
+- Make it a photograph, and name a real lens or film look. Do not choose an oil
+  painting or a 3D render unless the request asked for one -- they come back soft
+  and hazy, where a photograph stays sharp.
+- Daylight unless the request implies otherwise.
 - Describe only what can be seen. No abstract nouns like innovation, strategy or
   growth -- those are ideas, not things a camera can point at.
 - Reply with the prompt only. No preamble, no quotes, no explanation."""
 
 
-def expand_prompt(brain, subject: str) -> str:
+def expand_prompt(brain, subject: str, allow_soft: bool = False,
+                  attempts: int = 2) -> str:
     """Turn a bare topic into a scene worth rendering, or "" if that fails.
 
     This is the difference between the two images in the bug report. "marketing"
@@ -251,6 +256,19 @@ def expand_prompt(brain, subject: str) -> str:
     """
     if brain is None:
         return ""
+    # A scene built entirely around a billboard cannot be repaired by dropping
+    # clauses, so ask again rather than falling back to the bare topic -- that
+    # fallback is what produced the empty grey rooms.
+    for attempt in range(1, max(1, attempts) + 1):
+        scene = _expand_once(brain, subject, allow_soft)
+        if scene:
+            return scene
+        if attempt < attempts:
+            print("[imagegen] scene was unusable; asking for another")
+    return ""
+
+
+def _expand_once(brain, subject: str, allow_soft: bool) -> str:
     try:
         from .brain.base import Message
 
@@ -269,7 +287,80 @@ def expand_prompt(brain, subject: str) -> str:
     text = text.strip("\"'` ")
     if len(text) < 40 or len(text) > 900:
         return ""
-    return text
+    return clean_scene(text, allow_soft=allow_soft)
+
+
+#: Things that only exist to carry words. Asked for "advertisements", the scene
+#: writer produced "giant LED screens displaying scrolling digital billboards for
+#: major brands such as Sony and Honda" -- every one of them banned by the prompt
+#: it had just been given.
+#:
+#: Which is the same lesson as the skill matching: an instruction the model may
+#: ignore is not a control. Check the output instead.
+_BANNED_IN_SCENE = re.compile(
+    r"\b(billboards?|signage|sign\s?boards?|neon\s+signs?|marquee|"
+    r"led\s+screens?|led\s+displays?|digital\s+displays?|advertisements?\s+"
+    r"displaying|posters?|banners?|placards?|headlines?|newspapers?\s+"
+    r"headline|logos?|brand\s+names?|labels?|price\s+tags?|number\s+plates?|"
+    r"licence\s+plates?|license\s+plates?|graffiti|slogans?|lettering|"
+    r"typography|captions?|subtitles?)\b",
+    re.IGNORECASE,
+)
+
+#: Media that come back soft. Not banned outright -- someone may ask for a
+#: painting -- but never chosen on the scene writer's own initiative.
+_SOFT_MEDIUM = re.compile(
+    r"\b(oil\s+painting|watercolou?r|3d\s+render|cgi|digital\s+painting|"
+    r"illustration|concept\s+art|matte\s+painting|airbrush)\b",
+    re.IGNORECASE,
+)
+
+#: Appended to an expanded scene, because build_prompt() -- and with it STYLE --
+#: is skipped when a scene is supplied. Without this the scene went to Flux with
+#: no sharpness direction at all, which is why the trading floor arrived as a
+#: golden fog.
+QUALITY_TAIL = "sharp focus, fine detail, natural light, photographic, no lettering"
+
+
+def clean_scene(scene: str, allow_soft: bool = False) -> str:
+    """Strip clauses that ask for things this generator cannot draw.
+
+    Works clause by clause rather than rejecting the whole scene: "a trading floor
+    at mid-morning, ticker machines, a massive analog clock, brass railings" only
+    needs one clause removing, and throwing the description away over it would
+    lose a perfectly good picture.
+
+    Returns "" when so little survives that the remainder is no longer a scene.
+    """
+    text = " ".join(str(scene or "").split())
+    if not text:
+        return ""
+
+    kept, dropped = [], 0
+    # Split on colons and "while" as well as punctuation. Scene writers produce
+    # long compound clauses -- "a Tokyo agency reflects the activity within:
+    # employees browsing giant LED screens ... while outside pedestrians hurry
+    # past" -- and on commas alone the banned screens took the agency and the
+    # pedestrians down with them.
+    for clause in re.split(r"\s*[;,:]\s*|\s+while\s+", text):
+        if not clause:
+            continue
+        if _BANNED_IN_SCENE.search(clause):
+            dropped += 1
+            continue
+        if not allow_soft and _SOFT_MEDIUM.search(clause):
+            dropped += 1
+            continue
+        kept.append(clause)
+
+    rebuilt = ", ".join(kept).strip(" ,.")
+    # Losing a clause or two is a repair; losing most of them means the scene was
+    # built around the thing we cannot draw, and it is better to start again.
+    if not rebuilt or len(rebuilt) < 40 or dropped > len(kept):
+        return ""
+    if dropped:
+        print(f"[imagegen] dropped {dropped} clause(s) the generator can't draw")
+    return rebuilt
 
 
 def build_prompt(subject: str, style: str = STYLE) -> str:
@@ -467,7 +558,10 @@ class ImageMaker:
         """
         if not self.enabled or self.exhausted:
             return None
-        prompt = " ".join(str(prompt or "").split()) or build_prompt(subject)
+        supplied = " ".join(str(prompt or "").split())
+        # A supplied scene skips build_prompt entirely, so it would otherwise
+        # carry no quality direction at all.
+        prompt = f"{supplied}, {QUALITY_TAIL}" if supplied else build_prompt(subject)
         if not prompt:
             return None
 
