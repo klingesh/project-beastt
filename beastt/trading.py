@@ -179,12 +179,38 @@ def assess(config: Config, status: Dict[str, Any]) -> Health:
     errors = status.get("recent_errors") or []
     if errors:
         concerns.append(f"{len(errors)} recent error(s) logged")
-    restarts = int(_number(status.get("restarts")))
-    if restarts >= 5:
-        concerns.append(f"it has restarted {restarts} times — possibly "
-                        "crash-looping")
+    looping = crash_looping(status)
+    if looping:
+        concerns.append(looping)
 
     return Health("running", "RUNNING", age, concerns)
+
+
+#: Restarts within an hour that suggest the bot cannot stay up.
+LOOP_THRESHOLD = 3
+
+
+def crash_looping(status: Dict[str, Any]) -> str:
+    """A warning about repeated restarts, or "" if there is nothing to say.
+
+    Judged on restarts *in the last hour*, not the lifetime total. The first
+    version tested the lifetime counter, which only ever rises -- so having been
+    restarted nine times by hand during one morning's maintenance, the report said
+    "possibly crash-looping" about a bot that had been stable for hours, and would
+    have gone on saying it forever. A warning that cannot expire is not a warning.
+
+    Older bots publish only the lifetime figure. Rather than guess a rate from it,
+    say nothing: a false alarm every five minutes for the life of the install is
+    worse than a missed one, and the number is still shown in the report either way.
+    """
+    recent = status.get("restarts_last_hour")
+    if recent is None:
+        return ""
+    count = int(_number(recent))
+    if count < LOOP_THRESHOLD:
+        return ""
+    return (f"it has restarted {count} times in the last hour — it may not be "
+            "staying up; check logs\\bot.log on the VPS")
 
 
 def _number(value: Any) -> float:
@@ -235,6 +261,14 @@ def summarise(config: Config, status: Dict[str, Any]) -> str:
     day_dd = _number(status.get("day_drawdown_percent"))
     day_limit = _number(status.get("day_loss_limit_percent"))
     lines.append(f"Today {day_dd:.2f}% of {day_limit:.2f}% limit")
+
+    # Stated as fact, not as a warning. Whether it means anything is decided by
+    # crash_looping(), which looks at the last hour rather than all history.
+    restarts = int(_number(status.get("restarts")))
+    if restarts:
+        recent = status.get("restarts_last_hour")
+        detail = f", {int(_number(recent))} in the last hour" if recent is not None else ""
+        lines.append(f"Restarts {restarts} since it was first started{detail}")
 
     positions = status.get("open_positions") or []
     if positions:
@@ -289,6 +323,9 @@ def alerts(config: Config, status: Dict[str, Any]) -> List[str]:
     if limit and dd >= limit * 0.75:
         out.append(f"Trading bot drawdown {dd:.2f}% — approaching the "
                    f"{limit:.2f}% kill switch")
+    looping = crash_looping(status)
+    if looping:
+        out.append(f"Trading bot {looping}")
     for err in (status.get("recent_errors") or [])[-1:]:
         out.append(f"Trading bot error: {err.get('message', '')[:160]}")
     return out

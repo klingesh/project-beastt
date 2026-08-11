@@ -96,7 +96,13 @@ def signature_of(health, status: Dict[str, Any]) -> str:
         near = 1 if limit and dd >= limit * 0.75 else 0
     except (TypeError, ValueError):
         pass
-    return f"{health.state}|near={near}|errors={errors}"
+    # Restarts in the last hour, not the lifetime total: the total only rises, so
+    # including it would make the signature change once and then never again --
+    # and before that, it would have alerted forever on a stale count.
+    from .trading import crash_looping
+
+    looping = 1 if crash_looping(status) else 0
+    return f"{health.state}|near={near}|errors={errors}|looping={looping}"
 
 
 def decide(previous: WatchState, health, status: Dict[str, Any],
@@ -170,6 +176,11 @@ def _running_concerns(status: Dict[str, Any]) -> List[str]:
                        f"way to the {limit:.2f}% kill switch.")
     except (TypeError, ValueError):
         pass
+    from .trading import crash_looping
+
+    looping = crash_looping(status)
+    if looping:
+        out.append(f"Trading bot {looping}")
     for err in (status.get("recent_errors") or [])[-1:]:
         out.append(f"Trading bot error: {str(err.get('message', ''))[:160]}")
     return out
