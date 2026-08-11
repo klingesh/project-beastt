@@ -153,14 +153,24 @@ class LongTermMemory:
                 break
             picked.append(fact["text"])
 
-        # If nothing matched, fall back to the most recently updated facts.
-        if len(picked) < min(limit, len(self.facts)):
-            recent = sorted(others, key=lambda f: f.get("updated", 0), reverse=True)
-            for fact in recent:
-                if len(picked) >= limit:
-                    break
-                if fact["text"] not in picked:
-                    picked.append(fact["text"])
+        # No padding with recent facts.
+        #
+        # There used to be a fallback here: if fewer than `limit` facts matched, it
+        # topped the list up with the most recently updated ones. Because a match is
+        # rare and the limit is eight, that fallback fired on almost every turn --
+        # so a question about generating an image arrived with seven unrelated facts
+        # attached, and the model, handed facts, found a way to use them. It
+        # produced replies that recommended a particular friend for artistic advice
+        # and read her mood from a greeting. She had nothing to do with either
+        # conversation.
+        #
+        # Relevance was the whole idea of this method; padding to a quota
+        # guaranteed the opposite. When nothing matches, the right answer is
+        # nothing. Core facts still go through, because who someone is and what
+        # they like to be called are relevant to every reply.
+        #
+        # "What do you remember about me?" is unaffected -- MemorySkill answers
+        # that directly and does not come through here.
         return picked
 
     def all_texts(self) -> List[str]:

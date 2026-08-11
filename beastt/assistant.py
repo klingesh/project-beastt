@@ -35,6 +35,28 @@ _ROLE_LEAK = re.compile(r"^\s*assistant\s*(?::|\n|$)", re.IGNORECASE)
 _LEAK_WORD = "assistant"
 
 
+def memory_instruction(user_name: str) -> str:
+    """How remembered facts are introduced to the model.
+
+    A module-level function rather than an inline f-string so its wording can be
+    asserted directly. The previous version said only "use them naturally when
+    relevant", which reads as a promise that the facts *were* relevant -- and the
+    recall code was padding the list to a quota, so usually they were not. Handed a
+    list of facts about a person, a model finds a use for them: a request to draw a
+    picture came back recommending a friend for artistic advice.
+
+    So this says plainly that most replies need none of it, and names the specific
+    failure rather than gesturing at it.
+    """
+    return (
+        f"[Background on {user_name} from previous conversations. It is here in "
+        f"case it helps. Most replies will not need any of it.\n"
+        f"Do not steer the answer towards it. Do not recite it or mention having "
+        f"notes. Do not bring up a person who has nothing to do with what was "
+        f"asked.]"
+    )
+
+
 def _strip_role_leak(text: str) -> str:
     match = _ROLE_LEAK.match(text or "")
     return text[match.end():].lstrip() if match else text
@@ -641,11 +663,7 @@ class Assistant:
         listing = "\n".join(f"- {f}" for f in facts)
         note = Message(
             role="system",
-            content=(
-                f"[Things you remember about {self.config.user_name} from previous "
-                f"conversations. Use them naturally when relevant -- don't recite them "
-                f"or mention that you have notes.]\n{listing}"
-            ),
+            content=memory_instruction(self.config.user_name) + "\n" + listing,
         )
         # Insert right after the persona so it reads as background knowledge.
         return [messages[0], note, *messages[1:]]
