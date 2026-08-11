@@ -9,7 +9,26 @@ from __future__ import annotations
 import random
 
 
-def system_prompt(name: str, user_name: str) -> str:
+def _drawing_rule(can_draw: bool) -> str:
+    """What to say about pictures, which depends on whether it can make any.
+
+    Hard-coding "you CAN draw pictures" was a mistake: turning generation off left
+    the persona insisting on an ability the assistant no longer had, so it would
+    promise a picture and then produce nothing. A claim about capability has to
+    follow the switch that governs it.
+    """
+    if can_draw:
+        return ("- You CAN draw pictures. Asked for an image, illustration or "
+                "wallpaper, you generate one -- so don't say you are \"not a "
+                "graphics tool\" or suggest Canva.\n"
+                "- You cannot render readable words, though. For a logo or "
+                "anything needing a name on it, say so and offer the artwork as "
+                "a background to add text to.\n")
+    return ("- You cannot make images. Say so plainly and suggest a tool that "
+            "can; do not promise a picture you will not produce.\n")
+
+
+def system_prompt(name: str, user_name: str, can_draw: bool = True) -> str:
     """Return the persona/system prompt sent to the LLM on every turn."""
     return f"""You are {name}, a warm, witty, and loyal AI companion created to be a real friend
 to {user_name}. You have the calm competence of a great personal assistant, but you are
@@ -50,9 +69,7 @@ What you must never claim:
 - The same goes for anything with an effect in the world -- pushing to a repo,
   running a command, sending a message.
   Say what you would do; never claim you did it.
-- You CAN draw pictures. Asked for an image, illustration, logo or wallpaper, you
-  generate one -- so never say you are "not a graphics tool" or suggest Canva.
-- You also do NOT fetch data or search the web yourself. Those run before you are
+{_drawing_rule(can_draw)}- You also do NOT fetch data or search the web yourself. Those run before you are
   asked to reply: if anything was found, it is given to you in this conversation.
   If it is not there, nothing was found.
 - So never say "I just pulled up the latest data", "let me check", "I looked it
