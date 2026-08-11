@@ -410,6 +410,23 @@ _CHART_KINDS = {
 }
 
 
+def _chart_caption(spec) -> str:
+    """The line printed under a chart: its source, or that it has none.
+
+    Ordering matters. A real source is stated even if something also set the
+    illustrative flag, and the admission is only printed when there is genuinely
+    nothing to cite -- but it IS printed, because an unlabelled invented chart is
+    the thing being fixed.
+    """
+    source = str((spec or {}).get("source") or "").strip()
+    units = str((spec or {}).get("units") or "").strip()
+    if source:
+        return f"{source}   {units}".strip() if units else source
+    if (spec or {}).get("illustrative"):
+        return "Illustrative figures — not from a cited source."
+    return ""
+
+
 def chart(sb, item, number, total, picture=None):
     """A native chart, with the bullets alongside it as commentary.
 
@@ -502,6 +519,23 @@ def chart(sb, item, number, total, picture=None):
                     pass
     except Exception:
         pass
+
+    # Where the numbers came from, printed on the slide itself.
+    #
+    # This is the point of the whole exercise. A native chart with axis labels
+    # looks authoritative whether or not anybody checked it, so the slide has to
+    # say which it is: a citation when the figures came from a publisher, and an
+    # explicit admission when they did not. Staying silent is what let invented
+    # numbers pass as sourced ones.
+    caption = _chart_caption(spec)
+    if caption:
+        try:
+            frame = sb.frame(slide, sb.MARGIN, top + int(height * 0.88),
+                             chart_width, Inches(0.34))
+            sb.write(frame, caption, sb.th.caption_size, sb.th.text_muted,
+                     first=True)
+        except Exception:
+            pass
 
     sb.takeaway(slide, item.get("key_message"))
     sb.footer(slide, number, total)

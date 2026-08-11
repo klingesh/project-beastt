@@ -28,7 +28,8 @@ _SCHEMAS = {
      "notes": "speaker notes",
      "image_query": "photo subject, only for layout image",
      "chart": {"type": "bar|line|pie", "categories": ["label"],
-               "series": [{"name": "series name", "values": [0]}]}}
+               "series": [{"name": "series name", "values": [0]}],
+               "data_query": "country and indicator, if published statistics exist"}}
   ],
   "closing": "Thank you"
 }""",
@@ -140,10 +141,18 @@ Rules:
   "image_query") for two or three where a photograph helps. Other options:
   "stat" -- also give "stat" and "stat_label";
   "chart" -- also give "chart" with a "type" of bar, line or pie, a
-  "categories" list of labels, and a "series" list of {{name, values}}. Values
-  must be real numbers you are confident about, and every series must have
+  "categories" list of labels, and a "series" list of {{name, values}}, with
   exactly as many values as there are categories. Prefer a chart over prose
-  whenever the point is quantitative;
+  whenever the point is quantitative.
+  If the chart shows a national statistic that an institution publishes -- GDP,
+  GDP growth, GDP per capita, inflation, unemployment, population, exports,
+  imports, foreign investment, government debt, interest rates -- then ALSO give
+  "data_query" naming the country and the indicator plainly, like "India GDP
+  growth" or "US inflation". Real figures will be fetched and will replace your
+  values, so put your best estimate in and do not worry about accuracy there.
+  Give "data_query" only for those published statistics. For anything else --
+  market share, a company's own revenue, survey results, projections -- leave it
+  out, and the chart will be labelled as illustrative;
   "comparison" -- also give "left" and "right", each with a heading and points;
   "quote" -- also give "quote" and "attribution";
   "timeline" -- also give "timeline", a list of items with label and text;
@@ -296,15 +305,82 @@ def _normalise_chart(raw) -> Optional[Dict]:
 
     if not series:
         return None
+    query = _clean(raw.get("data_query") or "")[:120]
     # Re-trim every series in case a later one was shorter than an earlier one.
     width = min(len(categories), min(len(s["values"]) for s in series))
     if width < 2:
         return None
-    return {
+    out = {
         "type": kind,
         "categories": categories[:width],
         "series": [{"name": s["name"], "values": s["values"][:width]} for s in series[:4]],
     }
+    if query:
+        out["data_query"] = query
+    return out
+
+
+def attach_real_data(spec: Dict, config, on_step=None) -> Dict:
+    """Replace invented chart numbers with published ones, or label them.
+
+    Every chart in every deck used to be drawn from figures the model made up. The
+    prompt asked it for figures it was confident about, which a language model
+    cannot supply -- so it produced plausible ones, and they were rendered as a
+    native chart with axis labels, indistinguishable from fact. In a deck submitted
+    to an examiner that is worse than a bland slide; it is a wrong one.
+
+    So: where the model declared a `data_query` naming a published national
+    statistic, fetch it and use the real series, carrying its citation onto the
+    slide. Where it did not, or where the fetch fails, mark the chart illustrative
+    so the slide says so. Either the numbers are sourced or they are labelled --
+    never presented as fact without being one.
+
+    Failures are non-fatal by design. A deck that renders with an honest
+    "illustrative figures" note beats no deck at all.
+    """
+    slides = [s for s in (spec.get("slides") or []) if isinstance(s, dict)]
+    charts = [s for s in slides if isinstance(s.get("chart"), dict)]
+    if not charts:
+        return spec
+
+    enabled = bool(getattr(config, "data_enabled", False)) if config else False
+
+    for slide in charts:
+        chart = slide["chart"]
+        query = str(chart.pop("data_query", "") or "").strip()
+
+        if not (enabled and query):
+            chart["illustrative"] = True
+            continue
+
+        try:
+            from . import data
+
+            if on_step:
+                on_step(f"Looking up real figures for {query[:60]}")
+            series = data.lookup(config, query, points=12)
+            real = data.as_chart(series, kind=chart.get("type", "line"))
+        except Exception as exc:
+            print(f"[docs] couldn't fetch data for {query!r}: "
+                  f"{exc.__class__.__name__}")
+            real = None
+
+        if not real:
+            print(f"[docs] no published series for {query!r}; "
+                  "marking the chart illustrative.")
+            chart["illustrative"] = True
+            continue
+
+        chart["type"] = real["type"]
+        chart["categories"] = real["categories"]
+        chart["series"] = real["series"]
+        chart["source"] = real["source"]
+        chart["illustrative"] = False
+        if real.get("units"):
+            chart["units"] = real["units"]
+        print(f"[docs] chart uses real data: {real['source']}")
+
+    return spec
 
 
 def _normalise(kind: str, spec: Dict, topic: str) -> Dict:

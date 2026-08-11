@@ -763,6 +763,50 @@ def no_data_prompt(reason: str, user_name: str = "the user") -> str:
     )
 
 
+def as_chart(series: Sequence[Series], kind: str = "line",
+             points: int = 8) -> Optional[Dict[str, Any]]:
+    """Turn fetched series into a chart specification, carrying its citation.
+
+    Built here rather than in the deck code because only this module knows what a
+    Series is, and because the citation has to travel with the numbers. A chart
+    without its source is exactly the thing this is meant to replace: figures on a
+    slide that nobody can check.
+
+    Series are aligned on the dates they share. Two countries fetched from the
+    World Bank usually agree, but not always -- one may have published a year the
+    other has not, and drawing those side by side would silently misalign the bars.
+    """
+    usable = [s for s in series if s and s.observations]
+    if not usable:
+        return None
+
+    common: Optional[List[str]] = None
+    for one in usable:
+        dates = [o.date for o in one.observations]
+        common = dates if common is None else [d for d in common if d in dates]
+    if not common or len(common) < 2:
+        return None
+    categories = common[-max(2, points):]
+
+    rows = []
+    for one in usable:
+        by_date = {o.date: o.value for o in one.observations}
+        rows.append({
+            "name": one.title[:40],
+            "values": [round(by_date[d], 4) for d in categories],
+        })
+
+    citations = "; ".join(f"{s.source}: {s.series_id}" for s in usable)
+    retrieved = usable[0].retrieved
+    return {
+        "type": kind if kind in ("bar", "line", "pie") else "line",
+        "categories": categories,
+        "series": rows,
+        "source": f"Source: {citations} (retrieved {retrieved})",
+        "units": usable[0].units,
+    }
+
+
 def describe(series: Sequence[Series]) -> str:
     """A one-line status for the interface, e.g. "FRED: US CPI inflation"."""
     usable = [s for s in series if s]

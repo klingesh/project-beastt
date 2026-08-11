@@ -232,6 +232,14 @@ class DocumentSkill(Skill):
         if kind == "document":
             spec["is_report"] = is_report(text)
 
+        if kind == "presentation":
+            # Charts were drawn from figures the model invented. Either fetch the
+            # real series or label the slide illustrative -- never present made-up
+            # numbers as fact in a file someone will hand in.
+            from ..docgen import attach_real_data
+
+            spec = attach_real_data(spec, config, on_step=self._progress)
+
         theme = _resolve_theme(spec, config.doc_theme)
         finder = None
         if kind == "presentation":
