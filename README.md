@@ -25,6 +25,9 @@ JARVIS is a voice **and** text AI assistant that runs on a **free, local** langu
 - 🔌 **Pluggable skills** — instant answers for time/date, easy to extend.
 - 🪶 **Graceful fallback** — every optional feature degrades cleanly instead of crashing.
 
+Documentation:
+- **Hardening log:** `docs/HARDENING_LOG.md` — real failures from live sessions, and what each fix changed.
+
 ## 🏗️ How it works
 
 ```
@@ -283,6 +286,14 @@ It has to exceed the *publisher's* interval rather than the bot's poll interval 
 the heartbeat is written every 60 seconds but only published every 300, so a
 healthy bot legitimately looks a few minutes old. Set it too low and JARVIS cries
 wolf every few minutes, which trains you to ignore it.
+
+### How this was built
+
+`docs/HARDENING_LOG.md` records the faults found while building the monitor and what
+each one changed — the stale snapshot that read as healthy, the crash-loop warning
+that could never expire, and why the refusals are matched explicitly instead of left
+to the model. The bot side of the same work is logged in the Tradingbot repository at
+`docs/HARDENING_LOG.md`.
 
 ## 🐙 GitHub access
 
