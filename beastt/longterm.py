@@ -32,9 +32,92 @@ _STOPWORDS = {
 }
 
 
+#: Plural forms that are not plurals, and words a naive rule would ruin.
+_NEVER_STEM = {
+    "analysis", "diagnosis", "thesis", "basis", "crisis", "series", "species",
+    "news", "physics", "maths", "business", "address", "access", "progress",
+    "gas", "bus", "plus", "less", "class", "glass", "pass", "chess", "boss",
+    "always", "perhaps", "sometimes", "yes", "his", "hers", "ours", "yours",
+    "this", "was", "has", "is", "its", "us",
+}
+
+_VOWELS = "aeiou"
+
+
+def _undouble(base: str) -> str:
+    """"runn" -> "run", but "attend" -> "attend"."""
+    if len(base) > 2 and base[-1] == base[-2] and base[-1] not in "lsz":
+        return base[:-1]
+    return base
+
+
+def _restore_e(base: str, was_doubled: bool) -> str:
+    """Put back the "e" that -ed/-ing swallowed, where one was probably there.
+
+    "lived" -> "liv" -> "live", but "running" -> "runn" -> "run" and not "rune".
+    A doubled consonant is the signal: English doubles precisely to *stop* the
+    preceding vowel being read as long, so a doubled base never wanted an "e".
+    """
+    if len(base) < 2:
+        return base
+    # A base left ending in "i" came from a "-y" verb, whatever its length:
+    # studied -> studi -> study, carried -> carri -> carry, applied -> appli ->
+    # apply. Checked before the length guard, which "studi" is too long for.
+    if base[-1] == "i":
+        return base[:-1] + "y"
+    if was_doubled or len(base) > 4:
+        return base
+    if base[-1] not in _VOWELS + "yw" and base[-2] in _VOWELS:
+        return base + "e"               # liv -> live, hop -> hope, mov -> move
+    return base
+
+
+def stem(word: str) -> str:
+    """Collapse a word to a key for comparison. Deliberately shallow.
+
+    Recall is exact-token overlap, which is what keeps it dependency-free and
+    instant -- and meant that "where do I live" did not match "Lingesh lives in
+    Chennai". Nothing was broken; the fact was there and simply never scored. From
+    the outside that is indistinguishable from the assistant having forgotten, and
+    it is the sort of thing a person notices and stops trusting.
+
+    So: suffixes only, no dictionary, no dependency. Nowhere near a real stemmer,
+    and it does not need to be -- the job is to make two spellings of the same word
+    meet, not to do linguistics. Everything here is a rule that fires on both the
+    question and the fact, so a mistake is at worst symmetrical.
+
+    The conservative bits matter more than the clever ones. `_NEVER_STEM` exists
+    because "analysis" is not a plural and "class" already ends in a doubled s, and
+    a rule that strips an "s" from either would fuse unrelated facts -- this
+    function also feeds the near-duplicate merge, where a false match silently
+    destroys one of two distinct memories.
+    """
+    word = str(word or "")
+    if len(word) <= 3 or word in _NEVER_STEM:
+        return word
+
+    for suffix, replacement in (("ies", "y"), ("sses", "ss"), ("ches", "ch"),
+                                ("shes", "sh"), ("xes", "x"), ("zes", "z")):
+        if word.endswith(suffix) and len(word) > len(suffix) + 1:
+            return word[: -len(suffix)] + replacement
+
+    if word.endswith("s") and not word.endswith(("ss", "us", "is", "ys")):
+        return word[:-1]                # lives -> live, laptops -> laptop
+
+    if word.endswith("ing") and len(word) > 5:
+        base = word[:-3]
+        return _restore_e(_undouble(base), _undouble(base) != base)
+
+    if word.endswith("ed") and len(word) > 4:
+        base = word[:-2]
+        return _restore_e(_undouble(base), _undouble(base) != base)
+
+    return word
+
+
 def _tokens(text: str) -> set:
     words = re.findall(r"[a-z0-9']+", text.lower())
-    return {w for w in words if w not in _STOPWORDS and len(w) > 2}
+    return {stem(w) for w in words if w not in _STOPWORDS and len(w) > 2}
 
 
 #: Ways of recording what someone is called. Deliberately narrow.

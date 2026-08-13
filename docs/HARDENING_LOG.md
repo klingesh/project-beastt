@@ -575,6 +575,57 @@ justification was an assumption nobody had checked.
 
 44 further checks in `test_staleness.py`. All ten applied mutations caught.
 
+### 8d. "Where do I live" could not find "lives in Chennai"
+
+Recorded as a known gap in 8a and closed here, because it is the kind of fault
+that costs trust rather than correctness.
+
+**Symptom.** Recall is exact-token overlap, so *"where do I live"* produced no
+match against *"Lingaa lives in Chennai"* -- `live` and `lives` are different
+strings. The fact was present, indexed, and simply never scored. From the outside
+that is indistinguishable from the assistant having forgotten, and forgetting is
+the one thing a memory feature cannot be caught doing.
+
+**Why it waited.** `_tokens()` feeds three things with three different costs:
+
+| Caller | Threshold | Cost of a *missed* match | Cost of a *false* match |
+| --- | --- | --- | --- |
+| `relevant()` | any overlap | a fact is not recalled | an irrelevant fact is injected |
+| `add()` | 0.8 | a fact is stored twice | **one of two distinct memories is destroyed** |
+| `forget()` | 0.5 | nothing is removed | **something nobody asked to lose is deleted** |
+
+Widening matching helps the first and endangers the other two, which is why this
+was not a one-line change and why the tests are in two halves: the forms that must
+meet, and the words that must stay apart.
+
+**Fix.** `stem()`, thirty lines of suffix rules and no dependency. Plurals
+(`laptops` → `laptop`, `cities` → `city`, `classes` → `class`), the `-s` verb form
+(`lives` → `live`), and `-ing`/`-ed` with the two cases that make a naive version
+useless: a doubled consonant is undoubled (`running` → `run`) and an elided "e" is
+restored when one was probably there (`lived` → `live`, `hoped` → `hope`). The
+signal separating those is that **English doubles a consonant precisely to stop
+the preceding vowel being read as long, so a doubled base never wanted an "e"** --
+which is what keeps `running` from becoming `rune`.
+
+Two guards do the defensive work. A `_NEVER_STEM` set, because "analysis" is not a
+plural and stripping its "s" would fuse it with unrelated facts; and a
+three-character floor, because the `-s` rule would otherwise turn "gps" into "gp".
+
+**The strict-xfail gate paid for itself here.** The known-gap test from 8a started
+*passing* the moment the stemmer landed, and `xfail(strict=True)` failed the run
+for it -- `XPASS(strict)` -- forcing the marker off rather than letting a fixed bug
+sit in the suite still described as broken.
+
+**And one test was quietly vacuous.** Removing the three-character floor broke
+nothing, because the words that test used -- "cat", "his", "was", "us" -- are all
+protected by some *other* rule, so none of them changed. It asserted an invariant
+it never exercised. Replaced with "gps", "sms", "abs" and "ops", which the missing
+floor really does damage. That is twice now that the mutation check has found not a
+missing test but **a passing one that proved nothing**, which is turning out to be
+its most useful property.
+
+110 checks in `test_stemming.py`. All thirteen applied breaks caught.
+
 ---
 
 ## Operator notes

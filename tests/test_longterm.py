@@ -309,24 +309,18 @@ class TestPersistence:
         assert LongTermMemory(path=str(tmp_path / "nope.json")).all_texts() == []
 
 
-class TestRecallLimitations:
-    """Recall is exact-token overlap with no stemming, which is the price of
-    staying dependency-free and instant. Worth pinning so the boundary is known
-    rather than discovered."""
+class TestRecallSurvivesWordEndings:
+    """Recall is exact-token overlap, which is what keeps it dependency-free and
+    instant -- and which used to mean "where do I live" never matched "Lingesh
+    lives in Chennai". The fact was there and simply never scored, which from the
+    outside is indistinguishable from having forgotten it."""
 
-    @pytest.mark.known_gap
-    @pytest.mark.xfail(strict=True, reason=(
-        "_tokens does no stemming, so 'where do I live' does not match "
-        "'Lingesh lives in Chennai' -- singular/plural and verb endings miss. "
-        "This shows up as the assistant appearing to have forgotten something it "
-        "was told. A small suffix-stripping step (lives->live, classes->class) "
-        "would fix the common cases without adding a dependency."))
     @pytest.mark.parametrize("question,fact", [
         ("where do I live", "Lingesh lives in Chennai"),
         ("how are my class going", "Lingesh attends classes at college"),
         ("what do I study", "Lingesh studies engineering"),
     ])
-    def test_word_endings_should_not_break_recall(self, memory, question, fact):
+    def test_word_endings_do_not_break_recall(self, memory, question, fact):
         memory.add(fact)
         assert fact in memory.relevant(question)
 
