@@ -700,7 +700,7 @@ pip install pytest
 pytest
 ```
 
-1382 checks, about two seconds. They need **no** model, no network, no API keys
+1481 checks, about three seconds. They need **no** model, no network, no API keys
 and no optional packages — every function they cover is pure, and
 `tests/conftest.py` stubs `requests` if it isn't installed (the stub raises if
 anything tries to make a real request).
@@ -728,6 +728,7 @@ What they cover, and why these functions in particular:
 | `longterm.stem` | "where do I live" finds "lives in Chennai", without fusing unrelated facts |
 | `search.looks_like_statement` | telling it something is not asking it to look something up |
 | `search.strip_assistant_name` | its own name never reaches a search engine |
+| `statements.fact_from` | "i live in chennai" is remembered as it is said, and survives a restart |
 
 Nineteen of those checks are marked `xfail(strict=True)`: known bugs, written out
 as the behaviour that *should* hold, with the cause in the reason string. The

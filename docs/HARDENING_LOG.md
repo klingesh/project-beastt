@@ -700,6 +700,76 @@ nothing.
 
 87 checks in `test_statements_and_names.py`. All sixteen applied mutations caught.
 
+### 8f. It was told where the user lived, and forgot
+
+**Symptom.** Said, restarted, gone:
+
+> **so jarvis where do i live**
+> You live with Prahadhesvaryaa K S, but I don't recall you mentioning the exact
+> location -- would you like to share that with me, Lingaa?
+
+**Three faults met to produce that answer.**
+
+*Nothing said in the browser was ever remembered.* `remember_session()` is called
+from four places in `cli.py` and from nowhere else, so the entire web interface
+wrote no durable facts at all. Every fact a browser conversation produced was
+lost. And in the CLI it only runs on a *graceful* exit -- while the restart
+procedure documented in these very operator notes is `taskkill /F`.
+
+*A plain statement was never captured.* `MemorySkill` needs the literal word
+"remember", so "i live in chennai" had no path into the store except
+end-of-session reflection, which needs a model call and a clean exit.
+
+*And 8e closed half a loop.* It correctly identified a first-person statement as
+**a fact being offered, to be remembered** -- stopped researching it, and then did
+not remember it. The judgement was right and only half-used.
+
+The fact it answered from was itself invented: end-of-session reflection had
+turned somebody being a *friend* into a living arrangement.
+
+**Fix.** `statements.fact_from()` captures durable facts as they are said,
+deterministically -- no model call, no waiting for the session to end, no
+dependence on how the process dies. A model is still better at distilling a whole
+conversation and still does that, but **"I live in Chennai" does not need a
+language model to be understood, and making it depend on one is how it came to be
+lost.**
+
+Three things the design turns on:
+
+* **Superseding.** Facts sharing a key are alternatives, so the newest wins:
+  nobody lives in two cities. Facts without one accumulate, because somebody can
+  own two laptops. Living *in* a place and living *with* someone get separate
+  keys, so neither erases the other.
+* **Keys are inferred for facts already on disk.** Keys are new, so every stored
+  fact predates them. Without reading a key back off the sentence, superseding
+  would pass every test and never once fire on an install that had been running
+  for months.
+* **Denials remove.** "i don't live with prahadhesvaryaa" is how someone corrects
+  a fact that was wrong, and this session had one to correct.
+
+The web interface now reflects every six assistant turns, on a background thread.
+On a timer rather than at the end, because a web chat has no end -- the tab is
+closed or the machine sleeps, and there is no exit hook to hang it on.
+
+**Five mutations were not caught, and three were real.** The transient guard was
+unpinned -- every case in that test was rejected for not matching any pattern at
+all, so the guard could have been deleted with the suite still green; it now has
+cases that *do* match and are still rejected ("i have a meeting today"). The
+stored key was unpinned, because `infer_key` made dropping it behaviourally
+invisible. And the one line in the streaming handler that triggers reflection was
+unpinned, that line being the entire fix -- the third call site in this project
+found this way, after `gather`'s name argument and a stub whose signature had
+fallen behind its caller.
+
+The other two were harness bugs worth recording for the shape of them. `return ""
+or (f"...")` does not disable anything, because the f-string is truthy. And
+removing the `^` from a pattern changed nothing, because `.match()` anchors
+regardless -- the anchoring is held twice over, and only removing both defences
+fails a test.
+
+99 checks in `test_remembering_statements.py`. All seventeen applied mutations
+caught.
+
 ---
 
 ## Operator notes
