@@ -689,6 +689,43 @@ Register it in `beastt/skills/__init__.py` inside `default_skills()`.
 
 Type or speak naturally. Say `bye`, `quit`, or `see you later` (or press Ctrl+C) to leave.
 
+## 🧪 Tests
+
+```bash
+pip install pytest
+pytest
+```
+
+748 checks, about half a second. They need **no** model, no network, no API keys
+and no optional packages — every function they cover is pure, and
+`tests/conftest.py` stubs `requests` if it isn't installed (the stub raises if
+anything tries to make a real request).
+
+What they cover, and why these functions in particular:
+
+| Area | Why it is tested |
+| --- | --- |
+| `trading.assess` / `crash_looping` | severity must not be masked, and a warning must be able to expire |
+| `TradingBotSkill` refusals | an action request must never reach the model |
+| `botwatch.decide` | an hour of alert behaviour, tested in milliseconds |
+| skill routing | "any update on my bot" must not be answered about BEASTT's own code |
+| `longterm.relevant` | recall must be relevant, or silent |
+| `shell.check` | the denylist, the allowlist, and project-folder confinement |
+| `wake.detect` | tolerant of mishearings, quiet during ordinary speech |
+| `code._safe_relpath`, `chats._safe_id` | a model-chosen name must not choose a location |
+| chart citations | figures are sourced or labelled, never presented as fact without being one |
+
+Nineteen of those checks are marked `xfail(strict=True)`: known bugs, written out
+as the behaviour that *should* hold, with the cause in the reason string. The
+suite stays green and CI fails the moment one is fixed without its marker being
+removed. They are listed in
+[`docs/HARDENING_LOG.md`](docs/HARDENING_LOG.md#7-every-check-in-this-log-had-been-written-run-and-thrown-away).
+
+CI runs the suite on Python 3.10–3.13 on every push and pull request, plus one job
+with nothing installed but pytest, and a byte-compile of every module — that last
+one matters because `update.py` overwrites this install's own source from the
+tracked branch.
+
 ## 🗺️ Roadmap ideas
 
 - Image generation, with the results dropped straight into slides

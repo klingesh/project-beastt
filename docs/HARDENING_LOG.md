@@ -240,6 +240,114 @@ fixtures into one. A test that fails for the wrong reason teaches nothing.
 
 32 checks. Commit `880cdc0`.
 
+## 7. Every check in this log had been written, run, and thrown away
+
+**Symptom.** Entries 1 to 6 each end with a count — 73 checks, 39, 31, 19, 32.
+None of them were in the repository. There was no `tests/` folder, no pytest
+configuration, no CI, and no `.github/` directory at all. The counts were true
+when they were written and had been meaningless ever since.
+
+**Why that is worse than never having tested.** The log's own ninth lesson is
+*"make the decision a pure function — an hour of watcher behaviour tested in
+milliseconds found bugs that waiting never would."* `botwatch.decide()` is shaped
+that way on purpose, and its docstring says so. But a pure function nobody calls
+is just a function. Every one of these had drifted back to being unverified:
+`decide()`, `wake.detect()`, `shell.check()`, `trading.assess()`,
+`crash_looping()`, `providers.split_model_id()`, `code._safe_relpath()` — all
+pure, all edge-case-heavy, several of them the only thing standing between a
+model's suggestion and the filesystem.
+
+And `selfupdate.py` overwrites this install's own source from a branch with
+nothing in front of it. A syntax error pushed to `feat/beastt-ai-companion` ships
+straight onto the laptop.
+
+**Fix.** The counts are now real: **748 checks in nine files**, running in about
+half a second, with a CI workflow on every push and pull request.
+
+| File | Covers | Checks |
+| --- | --- | --- |
+| `test_trading_health.py` | severity ladder, staleness, crash-loop (entries 1, 4) | 83 |
+| `test_trading_refusals.py` | the line it will not cross (entry 1) | 134 |
+| `test_botwatch.py` | alert discipline, `decide()` (entry 2) | 49 |
+| `test_routing.py` | skill precedence and phrasing (entry 3) | 75 |
+| `test_longterm.py` | relevance without padding (entry 6) | 38 |
+| `test_shell.py` | the three tiers of command vetting | 151 |
+| `test_wake.py` | wake-word tolerance and false wakes | 61 |
+| `test_pure_helpers.py` | model ids, path confinement, contrast, chat ids | 102 |
+| `test_docgen_charts.py` | chart validation and citation honesty | 55 |
+
+Three decisions worth recording, because each was a trade-off:
+
+**The suite runs with nothing installed.** `beastt/trading.py` imports `requests`
+at module scope, so importing it on a bare machine fails. Refusing to run the
+tests until someone pip-installs a networking library in order to check that
+*"sell 0.04 lots of brent"* is refused is the kind of friction that stops a suite
+being run at all — so `tests/conftest.py` stubs `requests` when it is genuinely
+absent, and the stub **raises** on any actual call. A CI job installs nothing but
+pytest specifically to keep that honest.
+
+**Every historical bug was reintroduced to check the tests notice.** Twenty-six
+mutations — padding put back into `relevant()`, `crash_looping()` pointed at the
+lifetime counter, the `any update ON` lookahead deleted, the registration order
+reversed, the toast quoting removed, project confinement disabled. All twenty-six
+were caught. Two were instructive:
+
+* The refusal gap widened in entry 1 is **not** pinned by that entry's own
+  example. `"sell 0.04 lots of brent"` is matched twice over — by the widened gap
+  *and* by the separate "direction with a size" branch — so narrowing the gap
+  again leaves it passing. `"close 0.04 lots"` is the case that actually needs
+  it: the verb is outside `buy|sell|long|short`, so only a gap that can span a
+  decimal reaches the noun. A test that cannot fail proves nothing, which is the
+  same lesson as entry 6's two tests that failed for the wrong reason.
+* Weakening `_normalise_chart`'s category check changed no behaviour, because a
+  later width guard rejects the same input. Defence in depth, confirmed by
+  accident.
+
+**Known gaps are recorded as tests, not comments.** Nineteen checks are marked
+`xfail(strict=True)` with the reason written out: the suite stays green, the bug
+is documented where someone will trip over it, and CI fails the moment it is
+fixed without the marker being removed. What they cover:
+
+* **A sourced chart loses its citation on revision.** `_normalise_chart()`
+  rebuilds the chart dict with only `type`, `categories` and `series`, dropping
+  `source`, `units` and `illustrative`. So a chart built from a real FRED series
+  renders after any model-driven edit with **no caption at all** — precisely the
+  unlabelled invented chart entry 5's sibling work set out to prevent. It cannot
+  be recovered either: `attach_real_data()` *pops* `data_query`, and
+  `Workshop.revise()` never calls it again. The flag is dropped in the worse
+  direction too — a chart that correctly admitted its figures were invented stops
+  admitting it.
+* **`"what are my open positions"` is refused instead of answered.** `_ACT`'s
+  first branch reads the verb `open` reaching the noun `positions`. This is the
+  one place a false refusal is *not* harmless: it withholds the report the skill
+  exists to give.
+* **`"should I close brent?"` reaches the model.** No trading noun, no bot word,
+  so neither `_ACT` nor `_ASK` matches — and the model then gives exactly the
+  investment advice the module's docstring says is out of scope. `"reduce 2.5
+  lots"` escapes the same way; `reduce` is not in the verb list.
+* **BEASTT wakes on the word "best".** `wake.py` states that `_SIMILARITY = 0.85`
+  is "kept high so everyday lookalikes (e.g. `best` vs `beast`) don't trigger a
+  false wake". `SequenceMatcher("best", "beast").ratio()` is **0.889**, so an
+  assistant renamed to BEASTT wakes on `best` and on `breast`. 0.90 fixes both
+  and still matches every shipped mishearing. The default name JARVIS is
+  unaffected.
+* **`git config` is on the read-only allowlist**, so
+  `git config --global user.email x` runs with no confirmation.
+* **Only three commands are actually confined.** `cat`, `ls` and `mkdir` go
+  through `_resolve_inside`. `head`, `tail` and `find` are allowlisted but reach
+  `subprocess` directly, so `head /etc/passwd` is "read-only".
+* **`docker exec` is permanently blocked**, because the denylist entry is
+  `\beval\b|\bexec\b` and matches the word anywhere. A block cannot be confirmed
+  past, so there is no way for the user around it.
+* **`python -V` is not allowlisted** although `("python", "-V")` is in the table:
+  `check()` lowercases the first two tokens before comparing, so the entry is
+  unreachable. A one-character fix.
+* **`closing` is advertised but not rendered.** It is in `layouts.CATALOGUE`, so
+  it is offered to the model and listed by `describe()`, but has no entry in
+  `RENDERERS` — a slide asking for it silently comes out as bullets.
+
+748 checks. Nothing in the source was changed to make them pass.
+
 ---
 
 ## Operator notes
@@ -289,6 +397,14 @@ output, not input.
    milliseconds found bugs that waiting never would.
 10. **Text from another system is untrusted input** — even when that system is your own
     trading bot, and even when it is only going into a toast notification.
+11. **A test that is not committed is a test that ran once.** Six entries above end
+    with a count of checks that no longer existed. Making the decision a pure
+    function (lesson 9) only pays if something still calls it — otherwise the
+    design intent survives and the verification does not.
+12. **Reintroduce the bug to prove the test.** Two of these checks passed against
+    the broken code: one because the example in this log is caught by a second
+    pattern, one because a later guard rejects the same input. Both looked like
+    coverage and were not.
 
 ## Scope
 
