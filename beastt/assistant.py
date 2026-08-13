@@ -126,7 +126,8 @@ class Assistant:
 
         # Long-term memory: facts that persist across sessions.
         self.longterm = (
-            LongTermMemory(self.config.memory_path)
+            LongTermMemory(self.config.memory_path,
+                           user_name=self.config.user_name)
             if self.config.longterm_enabled
             else None
         )
@@ -349,9 +350,18 @@ class Assistant:
     def _deliberate(self, text: str) -> Iterator[dict]:
         """Understand, plan and work through a request, reporting each stage.
 
-        Attachments and remembered facts are handed over as context, so the plan
-        is made knowing what material is already available -- that is what stops
-        it searching the web for a document the user just uploaded.
+        Attachments are handed over as context, so the plan is made knowing what
+        material is already available -- that is what stops it searching the web
+        for a document the user just uploaded.
+
+        Remembered facts are deliberately **not** handed over. They used to be,
+        and the planner treated them as part of the subject to be researched:
+        asked to check some share prices, it searched the user's own nickname,
+        found the 2014 Rajinikanth film of the same name, and reported that it
+        "couldn't find a direct connection between the information about you ...
+        and [a friend's name]". Background about who is asking is not material to
+        be researched. The reply itself still gets the facts, through
+        _augment_with_memories, where they belong.
         """
         from . import deliberate
 
@@ -363,12 +373,6 @@ class Assistant:
                 f"Files attached to this conversation ({names}) -- their text "
                 f"follows, so do not search for it:\n{attached[:6000]}"
             )
-        if self.longterm is not None and len(self.longterm):
-            facts = self.longterm.relevant(text, limit=self.config.memory_recall_limit)
-            if facts:
-                context_parts.append("Things you remember about "
-                                     f"{self.config.user_name}:\n"
-                                     + "\n".join(f"- {f}" for f in facts))
 
         return deliberate.work(
             self.brain, text,

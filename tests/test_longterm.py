@@ -29,8 +29,13 @@ from beastt.longterm import LongTermMemory, _tokens
 
 @pytest.fixture
 def memory(tmp_path):
-    """An empty store on disk. Never the developer's real memory file."""
-    return LongTermMemory(path=str(tmp_path / "memory.json"))
+    """An empty store on disk. Never the developer's real memory file.
+
+    `user_name` matters: it is how the store tells "what the user is called"
+    from "what somebody else is called", which decides what bypasses relevance.
+    """
+    return LongTermMemory(path=str(tmp_path / "memory.json"),
+                          user_name="Lingesh")
 
 
 @pytest.fixture
@@ -72,7 +77,7 @@ def populated(memory):
 
 # --- the bug ---------------------------------------------------------------
 class TestNoPadding:
-    def test_an_unrelated_question_recalls_nothing_but_core(self, populated):
+    def test_an_unrelated_question_recalls_nothing_but_identity(self, populated):
         """The reported failure: a request to draw a picture must not arrive
         carrying facts about people."""
         recalled = populated.relevant("draw me a picture of a cat")
@@ -80,7 +85,7 @@ class TestNoPadding:
         assert recalled == ["Lingesh likes to be called Lingaa"]
         assert not any("Priya" in fact for fact in recalled)
 
-    def test_a_bare_greeting_recalls_nothing_but_core(self, populated):
+    def test_a_bare_greeting_recalls_nothing_but_identity(self, populated):
         """The other half of the report: "Hello." came back with a reading of the
         user's mood attributed to a friend."""
         recalled = populated.relevant("Hello.")
@@ -122,7 +127,7 @@ class TestRelevantRecallStillWorks:
         assert "Priya prefers oat milk in her coffee" in recalled
         assert not any("hatchback" in f for f in recalled)
 
-    def test_core_facts_come_first(self, populated):
+    def test_identity_facts_come_first(self, populated):
         """Who someone is and what they like to be called bear on every reply."""
         recalled = populated.relevant("what laptop do I have")
         assert recalled[0] == "Lingesh likes to be called Lingaa"
@@ -147,14 +152,23 @@ class TestRelevantRecallStillWorks:
 
         assert memory.relevant("laptop")[0] == "Lingesh has an RTX 3050 laptop"
 
-    def test_all_core_facts_go_through_regardless_of_the_limit(self, memory):
+    def test_identity_facts_go_through_regardless_of_the_limit(self, memory):
+        """Being *asked* to remember something is no longer enough to be sent
+        every turn -- only identity is. A friend the user asked about once must
+        not ride along on a question about share prices.
+        """
         memory.add("Lingesh prefers to be called Lingaa", core=True)
         memory.add("Lingesh works as a data analyst", core=True)
         memory.add("Lingesh lives in Chennai", core=True)
         memory.add("Lingesh speaks Tamil and English", core=True)
         assert len(memory) == 4
 
-        assert len(memory.relevant("anything at all", limit=2)) == 4
+        recalled = memory.relevant("anything at all", limit=2)
+
+        assert recalled == ["Lingesh prefers to be called Lingaa"]
+        # The other three are kept, and come back when they are asked about.
+        assert "Lingesh lives in Chennai" in memory.relevant("how is Chennai")
+        assert "Lingesh works as a data analyst" in memory.relevant("my analyst work")
 
 
 # --- the instruction, which was the other half of the fix -----------------
@@ -228,8 +242,18 @@ class TestAdd:
         memory.add("Lingesh has an RTX 3050 laptop")
         memory.add("Lingesh has an RTX 3050 laptop", core=True)
 
-        assert memory.relevant("something entirely unrelated") == [
+        assert memory.facts[0]["core"] is True
+        # Promotion means "keep this and prefer it when it matches", not "recite
+        # it on every turn".
+        assert memory.relevant("something entirely unrelated") == []
+        assert memory.relevant("what laptop do I have") == [
             "Lingesh has an RTX 3050 laptop"]
+
+    def test_core_is_preferred_among_facts_that_match(self, memory):
+        memory.add("Lingesh uses a laptop for college work")
+        memory.add("Lingesh has an RTX 3050 laptop", core=True)
+
+        assert memory.relevant("laptop")[0] == "Lingesh has an RTX 3050 laptop"
 
     def test_the_store_is_bounded_and_drops_the_oldest_non_core_first(self,
                                                                      tmp_path):
@@ -283,6 +307,28 @@ class TestPersistence:
 
     def test_a_missing_file_is_not_an_error(self, tmp_path):
         assert LongTermMemory(path=str(tmp_path / "nope.json")).all_texts() == []
+
+
+class TestRecallLimitations:
+    """Recall is exact-token overlap with no stemming, which is the price of
+    staying dependency-free and instant. Worth pinning so the boundary is known
+    rather than discovered."""
+
+    @pytest.mark.known_gap
+    @pytest.mark.xfail(strict=True, reason=(
+        "_tokens does no stemming, so 'where do I live' does not match "
+        "'Lingesh lives in Chennai' -- singular/plural and verb endings miss. "
+        "This shows up as the assistant appearing to have forgotten something it "
+        "was told. A small suffix-stripping step (lives->live, classes->class) "
+        "would fix the common cases without adding a dependency."))
+    @pytest.mark.parametrize("question,fact", [
+        ("where do I live", "Lingesh lives in Chennai"),
+        ("how are my class going", "Lingesh attends classes at college"),
+        ("what do I study", "Lingesh studies engineering"),
+    ])
+    def test_word_endings_should_not_break_recall(self, memory, question, fact):
+        memory.add(fact)
+        assert fact in memory.relevant(question)
 
 
 class TestTokens:
