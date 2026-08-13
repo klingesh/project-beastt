@@ -7,8 +7,11 @@ can recall things you told it days ago.
 Design notes:
   * Facts are short, self-contained sentences ("Lingaa has an RTX 3050 laptop").
   * Recall is keyword-overlap based -- no embedding model needed, so this stays
-    dependency-free and instant. Facts marked `core` are always included.
+    dependency-free and instant.
   * Near-duplicate facts are merged so the store doesn't grow unbounded.
+  * Only *identity* facts -- what the user likes to be called -- are included
+    unconditionally. See `is_identity` and `relevant` for why that distinction
+    had to be drawn.
 """
 
 from __future__ import annotations
@@ -34,16 +37,74 @@ def _tokens(text: str) -> set:
     return {w for w in words if w not in _STOPWORDS and len(w) > 2}
 
 
+#: Ways of recording what someone is called. Deliberately narrow.
+_IDENTITY_PATTERNS = (
+    r"likes? to be called",
+    r"prefers? to be called",
+    r"wants? to be called",
+    r"prefers? the name",
+    r"goes by",
+    r"is known as",
+    r"name is",
+)
+_IDENTITY_RE = re.compile("|".join(_IDENTITY_PATTERNS), re.IGNORECASE)
+
+#: Heads that mean "this is about the user" even without their name in the text.
+_SELF_SUBJECTS = {"", "the user", "user"}
+
+#: At most this many identity facts bypass relevance, so the always-on set
+#: cannot quietly grow back into the every-turn dossier this replaced.
+MAX_IDENTITY = 3
+
+
+def is_identity(text: str, user_name: str = "") -> bool:
+    """Does this fact say what the *user* is called?
+
+    This is the only class of fact that belongs in every single reply, and
+    drawing the line here matters more than it looks.
+
+    Recall used to include every fact marked `core`, unconditionally, on the
+    reasoning that "who someone is and what they like to be called are relevant
+    to every reply". That reasoning is sound; the flag was not. `core` is set by
+    exactly one thing -- MemorySkill, when the user says "remember that ..." --
+    so anything the user ever asked to be remembered became permanent every-turn
+    context. Told once to remember a friend, the assistant then asked after her
+    in reply to "nothing much", to a question about Tamil Nadu news, and to a
+    complaint about wrong stock prices. Worse, the same facts were handed to the
+    research planner as its context, which went and researched the user's own
+    nickname and reported back about a 2014 Rajinikanth film.
+
+    So the test is narrow on purpose: an identity phrase, with the *user* as its
+    subject. "Lingaa likes to be called Lingaa" passes. "Prahadhesvaryaa is
+    Lingaa's close friend" does not -- it is still remembered, still recalled the
+    moment she is mentioned, and no longer volunteered when she is not.
+    """
+    match = _IDENTITY_RE.search(text or "")
+    if not match:
+        return False
+    head = str(text)[: match.start()].strip().lower().strip(",'\"")
+    name = str(user_name or "").strip().lower()
+    if name and name in head:
+        return True
+    # A fact stored without a subject ("likes to be called Lingaa") is about the
+    # user; one whose subject is somebody else is not.
+    return head in _SELF_SUBJECTS
+
+
 class LongTermMemory:
     """A tiny persistent fact store with relevance-based recall."""
 
-    def __init__(self, path: str = "beastt_memory/memory.json", max_facts: int = 300):
+    def __init__(self, path: str = "beastt_memory/memory.json", max_facts: int = 300,
+                 user_name: str = ""):
         # Resolve against the project so a background service launched from an
         # arbitrary directory still finds the same memory file.
         from .paths import resolve
 
         self.path = str(resolve(path))
         self.max_facts = max_facts
+        #: Needed to tell "what the user is called" from "what somebody else is
+        #: called" -- see is_identity().
+        self.user_name = str(user_name or "")
         self.facts: List[Dict] = []
         self._load()
 
@@ -131,23 +192,52 @@ class LongTermMemory:
         return n
 
     # --- reading ----------------------------------------------------------
+    def identity_facts(self) -> List[str]:
+        """The facts that belong in every reply: what the user is called."""
+        found = [f["text"] for f in self.facts
+                 if is_identity(f["text"], self.user_name)]
+        return found[:MAX_IDENTITY]
+
     def relevant(self, query: str, limit: int = 8) -> List[str]:
-        """Return facts most relevant to `query`, always including core facts."""
+        """Facts relevant to `query`, plus the user's own name.
+
+        Two rules, and the second one is the fix for a real failure:
+
+        * **Identity facts always go through** -- what someone likes to be called
+          bears on every reply.
+        * **Everything else must earn its place by matching the question.** That
+          includes facts the user explicitly asked to be remembered. Being asked
+          to remember something means keep it, not recite it: a fact about a
+          friend is recalled the moment she comes up and stays quiet when she
+          does not. Previously every `core` fact was injected on every turn, and
+          the model, handed a name, found a reason to use it.
+
+        Being `core` still counts for something -- a slight scoring boost, and
+        protection from eviction -- it just no longer bypasses relevance.
+        """
         q = _tokens(query)
-        core = [f for f in self.facts if f.get("core")]
-        others = [f for f in self.facts if not f.get("core")]
+        always = self.identity_facts()
+        picked = list(always)
+        already = set(always)
 
         scored = []
-        for fact in others:
+        for fact in self.facts:
+            if fact["text"] in already:
+                continue
             ft = _tokens(fact["text"])
             if not ft:
                 continue
             overlap = len(ft & q)
-            if overlap:
-                scored.append((overlap / len(ft), fact))
+            if not overlap:
+                continue
+            score = overlap / len(ft)
+            if fact.get("core"):
+                # Asked for deliberately, so preferred among things that match --
+                # but it still has to match.
+                score += 0.25
+            scored.append((score, fact))
         scored.sort(key=lambda pair: pair[0], reverse=True)
 
-        picked = [f["text"] for f in core]
         for _score, fact in scored:
             if len(picked) >= limit:
                 break
@@ -166,8 +256,14 @@ class LongTermMemory:
         #
         # Relevance was the whole idea of this method; padding to a quota
         # guaranteed the opposite. When nothing matches, the right answer is
-        # nothing. Core facts still go through, because who someone is and what
-        # they like to be called are relevant to every reply.
+        # nothing.
+        #
+        # Removing the padding was not enough on its own, though: every `core`
+        # fact still went through unconditionally, and `core` means "the user
+        # asked me to remember this" rather than "this is who the user is". So the
+        # same friend came back through the other door -- volunteered in reply to
+        # "nothing much", to a question about state news, and to a complaint about
+        # wrong share prices. Only identity facts bypass relevance now.
         #
         # "What do you remember about me?" is unaffected -- MemorySkill answers
         # that directly and does not come through here.

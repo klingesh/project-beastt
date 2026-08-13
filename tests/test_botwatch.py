@@ -46,13 +46,20 @@ def halted(status, reason="max drawdown reached"):
 class TestSignature:
     """What counts as "news", collapsed to a comparable string."""
 
-    def test_equity_and_heartbeat_are_excluded(self, status, health):
+    def test_equity_and_heartbeat_are_excluded(self, status, health, stamp):
         """They move on every single check; including them would make every
-        check look like news and the watcher would never stop talking."""
+        check look like news and the watcher would never stop talking.
+
+        The heartbeat has to be moved *relatively*. The first version of this
+        test wrote a literal "2026-08-13T08:59:30+00:00", which is a fresh
+        heartbeat for fifteen minutes and a stale one for ever afterwards -- so
+        it passed on the machine it was written on and failed that afternoon on
+        someone else's, reporting a state change that was really a clock.
+        """
         before = botwatch.signature_of(health(status), status)
 
         status.update(equity=99999.0, balance=98000.0, peak_equity=100000.0,
-                      heartbeat="2026-08-13T08:59:30+00:00")
+                      heartbeat=stamp(2))
 
         assert botwatch.signature_of(health(status), status) == before
 
@@ -125,12 +132,12 @@ class TestAlertOnChange:
         assert botwatch.decide(settled, health(status), status, now=NOW)[0] == []
 
     def test_a_worsening_state_is_announced_even_while_already_bad(
-            self, settled, status, health):
+            self, settled, status, health, stamp):
         halted(status)
         _msgs, halted_state = botwatch.decide(settled, health(status), status,
                                               now=NOW)
 
-        status.update(halted=False, heartbeat="2026-08-13T07:00:00+00:00")
+        status.update(halted=False, heartbeat=stamp(120))
         messages, _ = botwatch.decide(halted_state, health(status), status,
                                       now=NOW + timedelta(minutes=10))
 

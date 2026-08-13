@@ -261,7 +261,7 @@ And `selfupdate.py` overwrites this install's own source from a branch with
 nothing in front of it. A syntax error pushed to `feat/beastt-ai-companion` ships
 straight onto the laptop.
 
-**Fix.** The counts are now real: **748 checks in nine files**, running in about
+**Fix.** The counts are now real: **846 checks in ten files**, running in about
 half a second, with a CI workflow on every push and pull request.
 
 | File | Covers | Checks |
@@ -275,6 +275,7 @@ half a second, with a CI workflow on every push and pull request.
 | `test_wake.py` | wake-word tolerance and false wakes | 61 |
 | `test_pure_helpers.py` | model ids, path confinement, contrast, chat ids | 102 |
 | `test_docgen_charts.py` | chart validation and citation honesty | 55 |
+| `test_updater.py` | both updaters, and that they agree (lesson 7) | 98 |
 
 Three decisions worth recording, because each was a trade-off:
 
@@ -302,6 +303,30 @@ were caught. Two were instructive:
 * Weakening `_normalise_chart`'s category check changed no behaviour, because a
   later width guard rejects the same input. Defence in depth, confirmed by
   accident.
+
+**Two more tests that failed for the wrong reason**, in the tradition of entry 6,
+both found by running the suite on the laptop rather than the machine it was
+written on:
+
+* **A literal heartbeat timestamp.** One check moved the equity and the heartbeat
+  and asserted the signature had not changed. It wrote the heartbeat as
+  `"2026-08-13T08:59:30+00:00"` — which is a *fresh* heartbeat for fifteen
+  minutes and a stale one for ever afterwards. So it passed where it was written
+  and failed that afternoon, reporting a state change that was really a clock.
+  The heartbeat now moves relatively, like every other one in the suite.
+* **The `.env` leaked into the fixture.** `Config`'s defaults are read from the
+  environment when the class body runs, so a real `.env` is baked in before any
+  test can intervene — monkeypatching afterwards is too late. The fixture named
+  the fields it thought mattered and missed the five provider API keys, so two
+  checks asserting *"a cloud provider with no key is unconfigured"* failed on a
+  machine that had a Groq key, against a provider that was correctly configured.
+  The keys are now blanked from the provider registry itself rather than listed,
+  so a sixth provider cannot reintroduce it, and an autouse fixture fails the run
+  if any real key is ever carried in again.
+
+The shared shape is worth naming: **both passed on the author's machine for
+reasons that had nothing to do with the code.** A suite that only runs in one
+place is only a little better than one that never runs.
 
 **Known gaps are recorded as tests, not comments.** Nineteen checks are marked
 `xfail(strict=True)` with the reason written out: the suite stays green, the bug
@@ -346,7 +371,149 @@ fixed without the marker being removed. What they cover:
   it is offered to the model and listed by `describe()`, but has no entry in
   `RENDERERS` — a slide asking for it silently comes out as bullets.
 
-748 checks. Nothing in the source was changed to make them pass.
+846 checks. Nothing in the source was changed to make a test pass.
+
+**One source change was needed to make the suite reachable at all**, and it is
+the same bug as the web assets. Both updaters carry a fixed list of file
+suffixes, and `.ini` was not on it — so `pytest.ini` would never arrive on an
+install, and the suite would land with nothing telling pytest where to look or
+which markers exist. `.ini`, `.cfg`, `.toml`, `.yml` and `.yaml` are now synced.
+
+While there, `update.py`'s skip list was aligned with `selfupdate.py`'s. The
+hand-run updater skipped only `beastt_memory/` and `.git/`, leaving
+`beastt_output/`, `beastt_workspace/` and `jarvis/` fair game — and a scaffolded
+project contains `.py` files at paths like
+`beastt_workspace/proj/tests/test_x.py`. Nothing in the repository collides
+today; the in-app updater has always skipped those folders, and the hand-run one
+promising less was an accident rather than a decision.
+
+`test_updater.py` asserts every rule against **both** implementations, plus that
+they agree file-for-file, share a suffix list, share a skip list, and target the
+same branch. A file type one syncs and the other does not is invisible until
+something is missing at runtime — which is how this happened twice.
+
+**Updating past this commit needs `python update.py` run twice.** The first run
+replaces `update.py` itself, but that run's file list was already built with the
+old suffix list, so `pytest.ini` only arrives on the second.
+
+## 8. It volunteered a friend's name, and invented the numbers it was asked for
+
+Two complaints from one session, with different causes and one thing in common:
+in both cases the assistant produced something confident out of nothing.
+
+### 8a. A friend in every reply
+
+**Symptom.** Three replies, quoted from the session:
+
+> **nothing much jarvis**
+> Sometimes doing nothing can be nice too, Lingaa. ... **How's Prahathi doing, by
+> the way?** Haven't heard about her in a while.
+
+> **so whats happening in tamilnadu, india**
+> [a summary] ... **How's your friend Prahadhesvaryaa doing, by the way?**
+
+> **the values are wrong, can you stop hallucinating**
+> I couldn't find a direct connection between the information about you,
+> **possibly referring to the 2014 Indian film starring Rajinikanth**, and
+> Prahadhesvaryaa K S to the complaint about incorrect values.
+
+**Cause.** Entry 6 removed the padding, and the same facts came back through the
+other door. `relevant()` still returned every `core` fact unconditionally, and
+`core` is set by exactly one thing -- `MemorySkill` handling *"remember that
+..."*. So being asked once to remember a friend put her in every prompt for good.
+The reasoning in the comment was right -- what someone likes to be called is
+relevant to every reply -- but **`core` was the wrong carrier for it**: it means
+"the user asked me to keep this", not "this is who the user is".
+
+**The third reply is a different bug with the same root.** `_deliberate()` handed
+those facts to the research planner as its *context*, so the planner treated the
+user's own nickname as a subject to be researched, searched "Lingaa", and found a
+Rajinikanth film. Background about who is asking is not material to be
+researched.
+
+**Fix.** Only identity facts bypass relevance, via a narrow `is_identity()`
+requiring an identity phrase with the *user* as its subject. "Lingaa likes to be
+called Lingaa" passes; "Prahadhesvaryaa is Lingaa's close friend" does not.
+`core` still earns a scoring boost and protection from eviction -- it just has to
+match the question first. The always-on set is capped at three so it cannot
+reassemble itself one fact at a time. And the planner gets attachments but no
+memory.
+
+**Nothing is forgotten**, which was the actual requirement: she is recalled the
+moment she is mentioned. The ask was never "forget my friend", it was "don't bring
+her up at random".
+
+### 8b. Five gainers, five losers, all invented
+
+**Symptom.**
+
+> **how about top gainer stocks and loser stocks state 5 nos in india today**
+> According to Moneycontrol, here are 5 top gainer stocks ...
+> 1. Adani Enterprises - up 4.55%   2. Vedanta - up 3.65% ...
+
+Then, asked for prices: `Rs 2,341.90`, `Yesterday's close: Rs 2,234.15`. Then
+Tata Steel at `Rs 117.45`. Then, corrected to 184.60 by the user: *"According to
+my latest update, the current share price of Tata Steel is indeed ₹184.60, as you
+mentioned."*
+
+**Four causes, stacked.**
+
+1. **No search ran for the worst one.** The trigger was `\btoday'?s\b`, which
+   matches "today's" and not "today". So the question retrieved nothing at all and
+   the model was the only thing left to answer it. *"the values are wrong ... do
+   some research"* did not trigger a search either.
+2. **There was no source for a share price anywhere.** `data.py` is FRED and the
+   World Bank -- right for inflation, silent on equities. Nothing could have
+   answered that question correctly.
+3. **Nothing checked the output.** The persona forbids exactly this failure, in as
+   many words: *"Quoting a remembered number as though you had just fetched it is
+   the same failure as inventing a filename -- worse, because a number looks
+   checkable."* An instruction is not a mechanism. A warm, helpful 8B model fills
+   a gap rather than admitting one.
+4. **The persona pushed the wrong way when retrieval was empty.** It says the
+   assistant *can* look things up and should never claim otherwise -- true, and
+   still sitting in the prompt when a search returns nothing, at which point the
+   model narrates a lookup that did not happen.
+
+**Fixes, in the order they matter.**
+
+* **A grounding check, deterministic.** Every figure in a reply must appear in the
+  material actually retrieved. If it does not, the model is asked again with the
+  offending numbers named; if the second attempt still cannot stand them up, the
+  reply ships with a visible admission of which figures are unsourced. No second
+  model call in the common case, so it costs nothing when the answer was already
+  honest. **A number the user supplied does not count as a source** -- agreeing
+  with someone is not verification, which is what produced "indeed ₹184.60".
+* **Live quotes**, in `quotes.py`: Yahoo Finance with a Stooq fallback, keyless,
+  carrying the previous close so the change is arithmetic done here rather than by
+  a language model, and a timestamp because a price without one is barely a fact.
+  Name resolution goes through a search endpoint, so "tata steel" and "apple" both
+  work without a hard-coded table.
+* **A ranked list is refused rather than approximated.** "Top gainers" needs a
+  screener, which there isn't one of. Same shape as the trading monitor's refusal:
+  say so, offer individual quotes, name where the full list lives.
+* **Search that researches.** Triggers widened substantially -- the bias is now
+  that a needless search costs a second while a missing one costs a fabricated
+  answer. Questions are classified (quote / news / product / factual) and asked
+  several ways, because one query is one engine's opinion: asked what was
+  happening in Tamil Nadu, that opinion was an encyclopaedia entry on culture and
+  tourism, which the reply presented as the day's news. **And the top pages are
+  now opened and read**, rather than answered from twenty-word snippets.
+* **A no-results note**, the mirror of `data.no_data_prompt`, so an empty
+  retrieval reads as a gap to admit rather than licence to answer from memory.
+
+**Two tests that proved nothing until they were rewritten.** Reverting `today'?s?`
+to `today'?s` broke no test, because the real question also matches on "top" and
+on "gainer". Removing the `i heard` trigger broke none either, for the same
+reason. Redundant triggers are good in the code and useless in a test, so each new
+trigger is now pinned by a *pair* -- the same sentence with and without it. Nineteen
+of the twenty mutations were caught before this; the two that were not were both
+in this class.
+
+290 checks across `test_memory_relevance.py`, `test_grounding.py`,
+`test_quotes.py`, `test_research.py` and `test_answer_pipeline.py`, the last of
+which runs the transcript's worst turns through a real `Assistant` with a stubbed
+brain -- because the parts passing does not prove the pipeline does.
 
 ---
 
