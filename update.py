@@ -31,9 +31,13 @@ OWNER = "klingesh"
 REPO = "project-beastt"
 DEFAULT_BRANCH = "feat/beastt-ai-companion"
 
-# Only code/config is synced; anything personal stays local.
+# Only code/config is synced; anything personal stays local. beastt_output/ and
+# beastt_workspace/ hold generated documents, cloned repositories and generated
+# code -- none of it ours to overwrite, and the in-app updater has always skipped
+# them. This list matching that one is the point.
 SKIP_EXACT = {".env"}
-SKIP_PREFIX = ("beastt_memory/", ".git/")
+SKIP_PREFIX = ("beastt_memory/", "beastt_output/", "beastt_workspace/",
+               ".git/", "jarvis/")
 
 ROOT = Path(__file__).resolve().parent
 
@@ -92,10 +96,13 @@ def _get(url: str, as_json: bool = False, accept: str = "*/*"):
 
 
 #: Everything that makes up the app: Python, config, and the web interface's
-#: assets. Omitting the web types once left the UI serving 404s.
+#: assets. Omitting the web types once left the UI serving 404s -- and omitting
+#: the config types did the same thing to the test suite, which arrived without
+#: the pytest.ini that tells pytest where to look and which markers exist.
 WANTED_SUFFIXES = (
     ".py", ".txt", ".md", ".example", ".gitignore",
     ".html", ".css", ".js", ".json", ".svg", ".ico",
+    ".ini", ".cfg", ".toml", ".yml", ".yaml",
 )
 
 

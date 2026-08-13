@@ -32,10 +32,13 @@ _UA = {"User-Agent": "beastt-selfupdate/1.0", "Accept": "*/*"}
 _SKIP_EXACT = {".env"}
 _SKIP_PREFIX = ("beastt_memory/", "beastt_output/", "beastt_workspace/", ".git/", "jarvis/")
 #: Python, config, and the web interface's assets. The web types matter: without
-#: them an update leaves the chat interface with no page to serve.
+#: them an update leaves the chat interface with no page to serve. The config
+#: types matter for the same reason -- pytest.ini is what points pytest at
+#: tests/ and registers the markers, so without it the suite arrives unrunnable.
 _KEEP_SUFFIX = (
     ".py", ".txt", ".md", ".example", ".gitignore",
     ".html", ".css", ".js", ".json", ".svg", ".ico",
+    ".ini", ".cfg", ".toml", ".yml", ".yaml",
 )
 
 VERSION_FILE = "version.json"
