@@ -515,6 +515,66 @@ in this class.
 which runs the transcript's worst turns through a real `Assistant` with a stubbed
 brain -- because the parts passing does not prove the pipeline does.
 
+### 8c. What the first live run then found
+
+The fixes above were written on a machine with no route to the open web, so the
+parsers were exercised against fixtures and the live paths were not exercised at
+all. Running it for real found three things, in rising order of interest.
+
+**The quote path worked.** *"whats tata steel current share price"* returned
+`184.90 INR on the BSE, as of 2026-08-13 10:23 UTC, change -0.55 (-0.30%) from a
+previous close of 185.45` -- fetched, timestamped, and attributed. The memory fix
+worked too: *"nothing much jarvis"* twice, with no friend volunteered, and *"how
+is prahadhesvaryaa doing"* recalled her immediately.
+
+**A caveat fired on a good answer.** The Tamil Nadu roundup -- five outlets, real
+stories, relative timestamps -- ended with *"I could not verify these figures
+against any source I retrieved: 40"*. The "40" was from "(about 40 minutes ago)",
+an interval the assistant had computed itself from a page's timestamp. There was
+nothing to verify. Worse, the same flaw meant "as of 2026-08-13 10:23 UTC" was
+being read as the four separate figures 2026, 13, 10 and 23, which had passed only
+because the quote block happened to contain the same digits; a reply that
+reformatted the timestamp would have been flagged for it. Dates, clock times and
+relative intervals are now masked before figures are extracted. **"40 minutes ago"
+is narration; "lasted 40 days" is still a claim.**
+
+**And the interesting one: every figure was real, sourced, and two years old.**
+Asked for today's top gainers, the assistant read a Moneycontrol page, took five
+movers and their percentages off it, and gave them as the day's biggest. The
+grounding check passed it -- correctly, because every number was on the page. The
+page was from **August 2024**.
+
+> **Grounding proves a figure came from a source. It does not prove the source was
+> current, and those are different claims.** Only the first is decidable by
+> comparing strings, which is exactly why it was the one implemented, and exactly
+> why it is not sufficient on its own.
+
+So pages are now dated. `stale_hint()` reads the years a page mentions and, when
+the current one is absent, reports the most recent year it does carry. The hint
+travels with the source into the prompt, and every instruction now requires that a
+figure taken from a dated source is given *with* that date and never presented as
+today's. The check is deliberately blunt -- it misses an undated page and will
+occasionally mislabel a historical article, both of which cost a caveat, whereas
+presenting two-year-old prices as live costs the answer.
+
+The movers rule changed with it. Flatly forbidding a ranked list was aimed at the
+right failure and was the wrong rule; the model half-ignored it anyway, and when a
+real page has been read its figures are worth having. It now says *report it, name
+the page, give its date, say it is a snapshot* -- because the difference between a
+useful answer and a wrong one here was never the list, it was the missing date.
+
+**A mutation that could not be observed, which turned out to be a design error.**
+Removing the guard that skipped staleness checks for unread pages broke no test --
+because an unread page has no text, so the check returned nothing either way. The
+guard was defensible on the stated reasoning (a snippet is too short to carry a
+dateline) and the reasoning was simply wrong: search engines routinely put the
+publication date at the *front* of a snippet, and when a page will not load that
+snippet is the only place its age is visible. Snippets are now judged too. The
+mutation check did not find a missing test here; it found a line whose only
+justification was an assumption nobody had checked.
+
+44 further checks in `test_staleness.py`. All ten applied mutations caught.
+
 ---
 
 ## Operator notes

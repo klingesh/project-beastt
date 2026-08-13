@@ -273,6 +273,9 @@ class Source:
     snippet: str = ""
     #: The page's own text, when it could be fetched. Empty means snippet only.
     body: str = ""
+    #: Set when the page looks older than it is being asked about. See
+    #: stale_hint() for why this earns a field of its own.
+    age_hint: str = ""
 
     @property
     def read(self) -> bool:
@@ -282,7 +285,42 @@ class Source:
         head = f"{self.title}\n   {self.url}".strip()
         content = self.body or self.snippet
         marker = "full page" if self.read else "search snippet only"
+        if self.age_hint:
+            marker += f"; {self.age_hint}"
         return f"{head}\n   [{marker}]\n   {content}".strip()
+
+
+#: Years that could plausibly date a page, rather than being a figure in it.
+_YEAR_RE = re.compile(r"\b(20[0-4]\d)\b")
+
+
+def stale_hint(text: str, today=None) -> str:
+    """Does this page look older than a question about "today" wants?
+
+    Grounding a figure proves it came from a source. It does not prove the source
+    was current, and those are different claims. Asked for today's top gainers,
+    the assistant read a Moneycontrol page, took five movers and their
+    percentages off it, and presented them as the day's biggest -- and the page
+    was from **August 2024**. Every number checked out. The answer was still
+    wrong, and confidently so.
+
+    The test is deliberately blunt: if the page mentions years but not the
+    current one, the most recent year it does mention is probably its own. That
+    misses an undated page and occasionally mislabels a historical article, both
+    of which only cost a caveat -- whereas presenting two-year-old prices as live
+    costs the answer.
+    """
+    from datetime import date
+
+    today = today or date.today()
+    years = {int(y) for y in _YEAR_RE.findall(str(text or ""))}
+    years = {y for y in years if y <= today.year}
+    if not years or today.year in years:
+        return ""
+    newest = max(years)
+    if newest == today.year - 1 and today.month <= 2:
+        return ""          # early January, last year's dateline is unremarkable
+    return f"page appears to be from {newest}, not {today.year}"
 
 
 @dataclass
@@ -327,7 +365,16 @@ def _instruction_for(kind: str, user_name: str) -> str:
         "state must appear in it -- if it does not, you do not know it, and "
         f"saying so is the correct answer. Never write \"according to\" a "
         f"publication that is not listed above. If the sources disagree, say so "
-        f"rather than picking one."
+        f"rather than picking one. "
+        # Coming from a source and being current are different claims, and only
+        # the first is checkable here. Asked for today's top gainers, the
+        # assistant lifted five movers off a Moneycontrol page from August 2024
+        # and presented them as the day's biggest. Every figure was real. The
+        # answer was wrong.
+        "Where a source is marked as appearing to be from an earlier year, or "
+        "carries its own date, give that date beside any figure you take from it "
+        "and say plainly that it is not today's. Never present a dated figure as "
+        "current just because you found it."
     )
     if kind == NEWS:
         return (
@@ -562,6 +609,17 @@ class WebSearch:
             source.body = self.fetch_page(source.url)
             if not source.body:
                 findings.problems.append(f"couldn't read {_host(source.url)}")
+
+        # Judge every source, read or not, on whatever text there is. Snippets
+        # were exempted at first on the grounds that they are too short to carry
+        # a dateline -- which is wrong: search engines routinely put the
+        # publication date at the front of one ("Aug 13, 2024 — Top gainers
+        # ..."), so a snippet is often the only place the age is visible when the
+        # page itself would not load.
+        for source in findings.sources:
+            source.age_hint = stale_hint(source.body or source.snippet)
+            if source.age_hint and on_step:
+                on_step(f"{_host(source.url)} — {source.age_hint}")
 
         return findings
 
