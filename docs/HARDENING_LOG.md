@@ -396,6 +396,125 @@ something is missing at runtime — which is how this happened twice.
 replaces `update.py` itself, but that run's file list was already built with the
 old suffix list, so `pytest.ini` only arrives on the second.
 
+## 8. It volunteered a friend's name, and invented the numbers it was asked for
+
+Two complaints from one session, with different causes and one thing in common:
+in both cases the assistant produced something confident out of nothing.
+
+### 8a. A friend in every reply
+
+**Symptom.** Three replies, quoted from the session:
+
+> **nothing much jarvis**
+> Sometimes doing nothing can be nice too, Lingaa. ... **How's Prahathi doing, by
+> the way?** Haven't heard about her in a while.
+
+> **so whats happening in tamilnadu, india**
+> [a summary] ... **How's your friend Prahadhesvaryaa doing, by the way?**
+
+> **the values are wrong, can you stop hallucinating**
+> I couldn't find a direct connection between the information about you,
+> **possibly referring to the 2014 Indian film starring Rajinikanth**, and
+> Prahadhesvaryaa K S to the complaint about incorrect values.
+
+**Cause.** Entry 6 removed the padding, and the same facts came back through the
+other door. `relevant()` still returned every `core` fact unconditionally, and
+`core` is set by exactly one thing -- `MemorySkill` handling *"remember that
+..."*. So being asked once to remember a friend put her in every prompt for good.
+The reasoning in the comment was right -- what someone likes to be called is
+relevant to every reply -- but **`core` was the wrong carrier for it**: it means
+"the user asked me to keep this", not "this is who the user is".
+
+**The third reply is a different bug with the same root.** `_deliberate()` handed
+those facts to the research planner as its *context*, so the planner treated the
+user's own nickname as a subject to be researched, searched "Lingaa", and found a
+Rajinikanth film. Background about who is asking is not material to be
+researched.
+
+**Fix.** Only identity facts bypass relevance, via a narrow `is_identity()`
+requiring an identity phrase with the *user* as its subject. "Lingaa likes to be
+called Lingaa" passes; "Prahadhesvaryaa is Lingaa's close friend" does not.
+`core` still earns a scoring boost and protection from eviction -- it just has to
+match the question first. The always-on set is capped at three so it cannot
+reassemble itself one fact at a time. And the planner gets attachments but no
+memory.
+
+**Nothing is forgotten**, which was the actual requirement: she is recalled the
+moment she is mentioned. The ask was never "forget my friend", it was "don't bring
+her up at random".
+
+### 8b. Five gainers, five losers, all invented
+
+**Symptom.**
+
+> **how about top gainer stocks and loser stocks state 5 nos in india today**
+> According to Moneycontrol, here are 5 top gainer stocks ...
+> 1. Adani Enterprises - up 4.55%   2. Vedanta - up 3.65% ...
+
+Then, asked for prices: `Rs 2,341.90`, `Yesterday's close: Rs 2,234.15`. Then
+Tata Steel at `Rs 117.45`. Then, corrected to 184.60 by the user: *"According to
+my latest update, the current share price of Tata Steel is indeed ₹184.60, as you
+mentioned."*
+
+**Four causes, stacked.**
+
+1. **No search ran for the worst one.** The trigger was `\btoday'?s\b`, which
+   matches "today's" and not "today". So the question retrieved nothing at all and
+   the model was the only thing left to answer it. *"the values are wrong ... do
+   some research"* did not trigger a search either.
+2. **There was no source for a share price anywhere.** `data.py` is FRED and the
+   World Bank -- right for inflation, silent on equities. Nothing could have
+   answered that question correctly.
+3. **Nothing checked the output.** The persona forbids exactly this failure, in as
+   many words: *"Quoting a remembered number as though you had just fetched it is
+   the same failure as inventing a filename -- worse, because a number looks
+   checkable."* An instruction is not a mechanism. A warm, helpful 8B model fills
+   a gap rather than admitting one.
+4. **The persona pushed the wrong way when retrieval was empty.** It says the
+   assistant *can* look things up and should never claim otherwise -- true, and
+   still sitting in the prompt when a search returns nothing, at which point the
+   model narrates a lookup that did not happen.
+
+**Fixes, in the order they matter.**
+
+* **A grounding check, deterministic.** Every figure in a reply must appear in the
+  material actually retrieved. If it does not, the model is asked again with the
+  offending numbers named; if the second attempt still cannot stand them up, the
+  reply ships with a visible admission of which figures are unsourced. No second
+  model call in the common case, so it costs nothing when the answer was already
+  honest. **A number the user supplied does not count as a source** -- agreeing
+  with someone is not verification, which is what produced "indeed ₹184.60".
+* **Live quotes**, in `quotes.py`: Yahoo Finance with a Stooq fallback, keyless,
+  carrying the previous close so the change is arithmetic done here rather than by
+  a language model, and a timestamp because a price without one is barely a fact.
+  Name resolution goes through a search endpoint, so "tata steel" and "apple" both
+  work without a hard-coded table.
+* **A ranked list is refused rather than approximated.** "Top gainers" needs a
+  screener, which there isn't one of. Same shape as the trading monitor's refusal:
+  say so, offer individual quotes, name where the full list lives.
+* **Search that researches.** Triggers widened substantially -- the bias is now
+  that a needless search costs a second while a missing one costs a fabricated
+  answer. Questions are classified (quote / news / product / factual) and asked
+  several ways, because one query is one engine's opinion: asked what was
+  happening in Tamil Nadu, that opinion was an encyclopaedia entry on culture and
+  tourism, which the reply presented as the day's news. **And the top pages are
+  now opened and read**, rather than answered from twenty-word snippets.
+* **A no-results note**, the mirror of `data.no_data_prompt`, so an empty
+  retrieval reads as a gap to admit rather than licence to answer from memory.
+
+**Two tests that proved nothing until they were rewritten.** Reverting `today'?s?`
+to `today'?s` broke no test, because the real question also matches on "top" and
+on "gainer". Removing the `i heard` trigger broke none either, for the same
+reason. Redundant triggers are good in the code and useless in a test, so each new
+trigger is now pinned by a *pair* -- the same sentence with and without it. Nineteen
+of the twenty mutations were caught before this; the two that were not were both
+in this class.
+
+290 checks across `test_memory_relevance.py`, `test_grounding.py`,
+`test_quotes.py`, `test_research.py` and `test_answer_pipeline.py`, the last of
+which runs the transcript's worst turns through a real `Assistant` with a stubbed
+brain -- because the parts passing does not prove the pipeline does.
+
 ---
 
 ## Operator notes

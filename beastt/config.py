@@ -151,6 +151,21 @@ class Config:
     #: are always answered straight away regardless.
     deliberate: bool = _get("BEASTT_DELIBERATE", "on").lower() in ("on", "true", "1", "yes")
     search_max_results: int = int(_get("BEASTT_SEARCH_RESULTS", "5"))
+    #: How many of the top results to open and read in full, rather than relying
+    #: on the search engine's snippet. A snippet is about twenty words chosen to
+    #: look relevant; answering from snippets alone is what made replies read as
+    #: confident summaries of pages nobody had opened. Costs roughly a second per
+    #: page. 0 restores the old snippet-only behaviour.
+    search_read_pages: int = int(_get("BEASTT_SEARCH_READ_PAGES", "3"))
+    #: Check that every figure in a reply appears in the material retrieved, and
+    #: re-ask once if not. Deterministic and local -- no extra model call unless
+    #: something is actually unsupported.
+    verify_figures: bool = _get("BEASTT_VERIFY", "on").lower() in (
+        "on", "true", "1", "yes")
+    #: Live market quotes (Yahoo Finance, Stooq fallback). Keyless, and both are
+    #: undocumented public endpoints, so this is here to be turned off.
+    quotes_enabled: bool = _get("BEASTT_QUOTES", "on").lower() in (
+        "on", "true", "1", "yes")
 
     # Speaker recognition (respond to only the owner's voice)
     speaker_only: bool = _get("BEASTT_MY_VOICE_ONLY", "off").lower() in ("on", "true", "1", "yes")

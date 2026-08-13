@@ -653,6 +653,10 @@ Copy `.env.example` to `.env` and adjust. CLI flags override `.env` values.
 | Speaking speed | `BEASTT_TTS_RATE` | `175` |
 | Whisper model | `BEASTT_STT_MODEL` | `base` (`small` is more accurate) |
 | Web search | `BEASTT_SEARCH` | `on` |
+| Results per query | `BEASTT_SEARCH_RESULTS` | `5` |
+| Pages opened and read | `BEASTT_SEARCH_READ_PAGES` | `3` |
+| Verify figures against sources | `BEASTT_VERIFY` | `on` |
+| Live market quotes | `BEASTT_QUOTES` | `on` |
 | Published data | `BEASTT_DATA` | `on` |
 | FRED key (US data) | `BEASTT_FRED_KEY` | _(none — World Bank needs no key)_ |
 | Generated artwork | `BEASTT_IMAGE_GEN` | `on` |
@@ -696,7 +700,7 @@ pip install pytest
 pytest
 ```
 
-846 checks, about half a second. They need **no** model, no network, no API keys
+1140 checks, about a second and a half. They need **no** model, no network, no API keys
 and no optional packages — every function they cover is pure, and
 `tests/conftest.py` stubs `requests` if it isn't installed (the stub raises if
 anything tries to make a real request).
@@ -715,6 +719,11 @@ What they cover, and why these functions in particular:
 | `code._safe_relpath`, `chats._safe_id` | a model-chosen name must not choose a location |
 | chart citations | figures are sourced or labelled, never presented as fact without being one |
 | `update.py` / `selfupdate.py` | the updater is the lifeline, and the two must agree on every file |
+| `longterm.relevant` (identity) | a remembered friend comes up when she's mentioned, not on every turn |
+| `grounding.check` | every figure in a reply is traceable to something retrieved |
+| `quotes` | a share price is fetched with a timestamp, or admitted as missing |
+| `search.classify` / `gather` | questions are researched several ways, and pages are read |
+| the whole answer pipeline | the transcript's worst turns, end to end, with a stubbed brain |
 
 Nineteen of those checks are marked `xfail(strict=True)`: known bugs, written out
 as the behaviour that *should* hold, with the cause in the reason string. The

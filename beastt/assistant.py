@@ -309,17 +309,33 @@ class Assistant:
             self.memory.add_assistant(skill_reply)
             return skill_reply
 
-        # 2. Otherwise, think with the brain -- augmenting with a live web
-        #    search first if the question needs current information.
+        # 2. Otherwise, gather whatever this question actually needs -- published
+        #    figures, a live quote, pages read from the web -- and only then ask
+        #    the brain. Everything retrieved is kept so the reply's figures can be
+        #    checked against it afterwards.
         self.memory.add_user(text)
         messages = self._context_for(text)
+        sources: List[str] = []
+
         series, data_problem = self._data_attempt(text)
         if series:
             messages = self._augment_with_data(series, messages)
+            from . import data as data_module
+
+            sources.append(data_module.as_prompt(series))
         elif data_problem:
             messages = self._augment_with_data_gap(data_problem, messages)
+
+        found, quote_problems, ranked = self._quote_attempt(text)
+        if found or quote_problems or ranked:
+            messages = self._augment_with_quotes(found, quote_problems, ranked,
+                                                 messages)
+            sources.extend(quote.as_text() for quote in found)
+
         if self._should_search(text, series):
-            messages = self._augment_with_search(text, messages)
+            findings = self._research(text)
+            messages = self._augment_with_findings(findings, messages)
+            sources.extend(findings.texts())
 
         try:
             reply = self.brain.reply(messages)
@@ -335,6 +351,8 @@ class Assistant:
         reply = _strip_role_leak(reply)
         if not reply:
             reply = "I'm not quite sure how to answer that -- can you say a bit more?"
+        else:
+            reply, _verdict = self._verify_figures(reply, text, sources, messages)
 
         self.memory.add_assistant(reply)
         return reply
@@ -487,9 +505,39 @@ class Assistant:
             yield {"type": "status",
                    "text": f"Couldn't fetch that figure — {data_problem}"}
             messages = self._augment_with_data_gap(data_problem, messages)
+        sources: List[str] = []
+        if series:
+            from . import data as data_module
+
+            sources.append(data_module.as_prompt(series))
+
+        found, quote_problems, ranked = self._quote_attempt(text)
+        if found or quote_problems or ranked:
+            if found:
+                for quote in found:
+                    yield {"type": "status", "text": f"Quoted {quote.symbol}"}
+            elif quote_problems:
+                yield {"type": "status",
+                       "text": f"Couldn't get a live quote — {quote_problems[0]}"}
+            if ranked and not found:
+                yield {"type": "status",
+                       "text": "No market screener available for a movers list"}
+            messages = self._augment_with_quotes(found, quote_problems, ranked,
+                                                 messages)
+            sources.extend(quote.as_text() for quote in found)
+
         if self._should_search(text, series):
-            yield {"type": "status", "text": f"Searching the web for “{extract_query(text)}”"}
-            messages = self._augment_with_search(text, messages)
+            # Statuses are collected from the researcher and forwarded, so the
+            # user can see which sites are being read rather than watching a
+            # spinner for ten seconds.
+            steps: List[str] = []
+            findings = self._research(text, on_step=steps.append)
+            for step in steps:
+                yield {"type": "status", "text": step}
+            if not findings.sources:
+                yield {"type": "status", "text": "Nothing usable found on the web"}
+            messages = self._augment_with_findings(findings, messages)
+            sources.extend(findings.texts())
 
         yield {"type": "status", "text": f"Thinking with {self.model_label()}"}
 
@@ -545,6 +593,24 @@ class Assistant:
         if not reply:
             reply = "I'm not quite sure how to answer that -- can you say a bit more?"
             yield {"type": "chunk", "text": reply}
+        else:
+            # Check the figures against what was actually retrieved. The reply is
+            # already on screen, so unlike the blocking path this cannot re-ask
+            # and replace it -- re-streaming a second answer over the top of the
+            # first reads as a glitch. It appends a visible admission instead,
+            # which is the honest option and still stops the number being
+            # believed.
+            from . import grounding
+
+            verdict = grounding.check(reply, sources=sources, question=text)
+            if not verdict.ok:
+                if self._verbose:
+                    print(f"[verify] unsupported figures -- {verdict.why()}")
+                yield {"type": "status",
+                       "text": f"Couldn't verify: {', '.join(verdict.unverified)}"}
+                note = grounding.caveat(verdict)
+                reply += note
+                yield {"type": "chunk", "text": note}
 
         self.memory.add_assistant(reply)
         yield {"type": "done", "reply": reply}
@@ -614,24 +680,120 @@ class Assistant:
             return False
         return not series or is_news(text)
 
-    def _augment_with_search(self, text: str, messages):
-        """Run a live web search and append the results as context for the brain."""
-        query = extract_query(text)
-        if self._verbose:
-            print(f"[search] Looking that up: {query!r}")
+    # --- quotes -------------------------------------------------------------
+    def _quote_attempt(self, text: str):
+        """(quotes, problems, ranked): live prices for this question, or why not.
+
+        `data.py` answers macro questions and has nothing for an equity, so
+        "whats tata steel current share price" previously reached no source at
+        all and the model answered from memory -- twice, with different numbers,
+        both credited to Moneycontrol.
+        """
+        if not getattr(self.config, "quotes_enabled", True):
+            return [], [], False
+        from . import quotes as quotes_module
+
+        ranked = quotes_module.is_ranked_list(text)
+        if not quotes_module.wanted(text) and not ranked:
+            return [], [], False
         try:
-            if is_news(text):
-                results = self.search.news(query, self.config.search_max_results)
-            else:
-                results = self.search.search(query, self.config.search_max_results)
+            found, problems = quotes_module.lookup(text)
+        except Exception as exc:
+            return [], [f"the quote lookup itself failed "
+                        f"({exc.__class__.__name__})"], ranked
+        if self._verbose and found:
+            for quote in found:
+                print(f"[quotes] {quote.as_text()}")
+        return found, problems, ranked
+
+    def _augment_with_quotes(self, found, problems, ranked, messages):
+        from . import quotes as quotes_module
+
+        blocks = []
+        if found:
+            blocks.append(quotes_module.as_prompt(found))
+        elif problems or not ranked:
+            blocks.append(quotes_module.no_quote_prompt(
+                problems, self.config.user_name))
+        if ranked:
+            blocks.append(quotes_module.ranked_list_prompt(self.config.user_name))
+        extra = [Message(role="system", content=b) for b in blocks if b]
+        return [*messages, *extra]
+
+    # --- research -----------------------------------------------------------
+    def _research(self, text: str, on_step=None):
+        """Search several ways, read the best pages, and return what was found."""
+        from . import search as search_module
+
+        kind = search_module.classify(text)
+        try:
+            findings = self.search.gather(
+                text, kind=kind,
+                max_results=self.config.search_max_results,
+                read_pages=getattr(self.config, "search_read_pages", 3),
+                on_step=on_step,
+            )
         except Exception as exc:
             if self._verbose:
-                print(f"[search] Search error: {exc}")
-            results = []
+                print(f"[search] research failed: {exc.__class__.__name__}: {exc}")
+            findings = search_module.Findings(question=text, kind=kind,
+                                             problems=[str(exc)[:120]])
+        if self._verbose:
+            print(f"[search] {len(findings.sources)} source(s), "
+                  f"{sum(1 for s in findings.sources if s.read)} read in full")
+        return findings
 
-        context = format_results(results)
-        note = Message(role="system", content=_SEARCH_INSTRUCTION + context)
-        return [*messages, note]
+    def _augment_with_findings(self, findings, messages):
+        """Append what was researched -- or, if nothing was, say so plainly."""
+        from . import search as search_module
+
+        block = search_module.format_findings(findings, self.config.user_name)
+        return [*messages, Message(role="system", content=block)]
+
+    def _augment_with_search(self, text: str, messages):
+        """Kept for callers that only want the old single-shot behaviour."""
+        findings = self._research(text)
+        return self._augment_with_findings(findings, messages)
+
+    # --- verifying what came back -------------------------------------------
+    def _verify_figures(self, reply: str, text: str, sources, messages):
+        """(reply, verdict): re-ask once if the reply states figures it cannot back.
+
+        The persona already forbids quoting a remembered number as though it had
+        been fetched, in as many words. Instructions were not enough -- a warm,
+        helpful 8B model fills a gap rather than admitting one. So this checks,
+        deterministically, that every figure in the reply appears in the material
+        that was retrieved, and gives the model exactly one chance to correct
+        itself with the offending numbers named.
+        """
+        if not getattr(self.config, "verify_figures", True):
+            return reply, None
+        from . import grounding
+
+        verdict = grounding.check(reply, sources=sources, question=text)
+        if verdict.ok:
+            return reply, verdict
+
+        if self._verbose:
+            print(f"[verify] unsupported figures -- {verdict.why()}")
+        retry = [*messages, Message(role="system",
+                                    content=grounding.retry_note(
+                                        verdict, self.config.user_name))]
+        try:
+            second = self.brain.reply(retry)
+        except Exception:
+            return reply + grounding.caveat(verdict), verdict
+
+        second = _strip_role_leak(str(second or "").strip())
+        if not second:
+            return reply + grounding.caveat(verdict), verdict
+
+        recheck = grounding.check(second, sources=sources, question=text)
+        if recheck.ok:
+            if self._verbose:
+                print("[verify] second attempt is fully sourced.")
+            return second, recheck
+        return second + grounding.caveat(recheck), recheck
 
     def set_attachments(self, text: str, names=None) -> None:
         """Provide file contents as background context for this conversation.
