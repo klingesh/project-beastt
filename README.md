@@ -700,7 +700,7 @@ pip install pytest
 pytest
 ```
 
-1185 checks, about a second and a half. They need **no** model, no network, no API keys
+1295 checks, about a second and a half. They need **no** model, no network, no API keys
 and no optional packages — every function they cover is pure, and
 `tests/conftest.py` stubs `requests` if it isn't installed (the stub raises if
 anything tries to make a real request).
@@ -725,6 +725,7 @@ What they cover, and why these functions in particular:
 | `search.classify` / `gather` | questions are researched several ways, and pages are read |
 | the whole answer pipeline | the transcript's worst turns, end to end, with a stubbed brain |
 | `search.stale_hint` | a sourced figure is not a current one — dated pages are labelled |
+| `longterm.stem` | "where do I live" finds "lives in Chennai", without fusing unrelated facts |
 
 Nineteen of those checks are marked `xfail(strict=True)`: known bugs, written out
 as the behaviour that *should* hold, with the cause in the reason string. The
