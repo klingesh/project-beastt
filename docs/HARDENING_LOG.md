@@ -261,7 +261,7 @@ And `selfupdate.py` overwrites this install's own source from a branch with
 nothing in front of it. A syntax error pushed to `feat/beastt-ai-companion` ships
 straight onto the laptop.
 
-**Fix.** The counts are now real: **748 checks in nine files**, running in about
+**Fix.** The counts are now real: **846 checks in ten files**, running in about
 half a second, with a CI workflow on every push and pull request.
 
 | File | Covers | Checks |
@@ -275,6 +275,7 @@ half a second, with a CI workflow on every push and pull request.
 | `test_wake.py` | wake-word tolerance and false wakes | 61 |
 | `test_pure_helpers.py` | model ids, path confinement, contrast, chat ids | 102 |
 | `test_docgen_charts.py` | chart validation and citation honesty | 55 |
+| `test_updater.py` | both updaters, and that they agree (lesson 7) | 98 |
 
 Three decisions worth recording, because each was a trade-off:
 
@@ -346,7 +347,30 @@ fixed without the marker being removed. What they cover:
   it is offered to the model and listed by `describe()`, but has no entry in
   `RENDERERS` — a slide asking for it silently comes out as bullets.
 
-748 checks. Nothing in the source was changed to make them pass.
+846 checks. Nothing in the source was changed to make a test pass.
+
+**One source change was needed to make the suite reachable at all**, and it is
+the same bug as the web assets. Both updaters carry a fixed list of file
+suffixes, and `.ini` was not on it — so `pytest.ini` would never arrive on an
+install, and the suite would land with nothing telling pytest where to look or
+which markers exist. `.ini`, `.cfg`, `.toml`, `.yml` and `.yaml` are now synced.
+
+While there, `update.py`'s skip list was aligned with `selfupdate.py`'s. The
+hand-run updater skipped only `beastt_memory/` and `.git/`, leaving
+`beastt_output/`, `beastt_workspace/` and `jarvis/` fair game — and a scaffolded
+project contains `.py` files at paths like
+`beastt_workspace/proj/tests/test_x.py`. Nothing in the repository collides
+today; the in-app updater has always skipped those folders, and the hand-run one
+promising less was an accident rather than a decision.
+
+`test_updater.py` asserts every rule against **both** implementations, plus that
+they agree file-for-file, share a suffix list, share a skip list, and target the
+same branch. A file type one syncs and the other does not is invisible until
+something is missing at runtime — which is how this happened twice.
+
+**Updating past this commit needs `python update.py` run twice.** The first run
+replaces `update.py` itself, but that run's file list was already built with the
+old suffix list, so `pytest.ini` only arrives on the second.
 
 ---
 

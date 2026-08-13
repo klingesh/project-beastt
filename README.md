@@ -696,7 +696,7 @@ pip install pytest
 pytest
 ```
 
-748 checks, about half a second. They need **no** model, no network, no API keys
+846 checks, about half a second. They need **no** model, no network, no API keys
 and no optional packages — every function they cover is pure, and
 `tests/conftest.py` stubs `requests` if it isn't installed (the stub raises if
 anything tries to make a real request).
@@ -714,6 +714,7 @@ What they cover, and why these functions in particular:
 | `wake.detect` | tolerant of mishearings, quiet during ordinary speech |
 | `code._safe_relpath`, `chats._safe_id` | a model-chosen name must not choose a location |
 | chart citations | figures are sourced or labelled, never presented as fact without being one |
+| `update.py` / `selfupdate.py` | the updater is the lifeline, and the two must agree on every file |
 
 Nineteen of those checks are marked `xfail(strict=True)`: known bugs, written out
 as the behaviour that *should* hold, with the cause in the reason string. The
