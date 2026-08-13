@@ -626,6 +626,80 @@ its most useful property.
 
 110 checks in `test_stemming.py`. All thirteen applied breaks caught.
 
+### 8e. "i live in chennai jarvis fyi"
+
+The worst answer this project has produced, and the most instructive, because
+every safeguard built in 8b worked correctly and the answer was still wrong.
+
+**Symptom.**
+
+> **i live in chennai jarvis fyi**
+> Got it, Lingaa -- so you're already enjoying the **Jarvis community** in
+> Chennai! It's the Casagrand-built, 8.5-acre gated enclave with 469 apartments,
+> 2/3/4 BHK options and over 100 amenities, slated for handover in March 2028.
+
+Then, when corrected:
+
+> **i live in pg not casagrand**
+> Nice to hear you've got a PG set up in Chennai! Stanza Living has a bunch of
+> options -- a triple-share in Porur starts around Rs 19,199 per month ...
+
+**Two faults, compounding.**
+
+*The message was a statement.* A fact was being offered, to be remembered. It was
+researched instead, because `live` had been added as a recency trigger for "live
+price" and "i **live** in chennai" contains it. The bias set in 8b -- that a
+needless search is cheap -- is right for questions and wrong for statements,
+because researching a statement does not produce a useless answer, it produces a
+confident answer about something else.
+
+*Then the assistant's own name went into the query.* The lead-in stripping
+carried a hardcoded `beastt` and this assistant is called Jarvis, so "jarvis"
+survived into the search. There is a Chennai apartment development called Jarvis.
+
+**Why the safeguards could not help.** The grounding check passed that reply, and
+had to: every figure was on a page that had genuinely been retrieved. The
+staleness check passed it too -- the page was current. Both mechanisms answer
+"did this come from a source", and neither can answer **"is this source about the
+thing that was asked"**. That is the third question, and the only defence against
+it is not to run the search in the first place.
+
+**Fixes.** `looks_like_statement()` -- first-person, no question mark, and none of
+the words that turn a sentence into a request. Hearsay is deliberately excluded:
+"i heard a student was murdered" is first-person and is the clearest possible ask
+to go and check. `strip_assistant_name()` removes every spelling the assistant
+answers to, reusing `wake.variants_for()` so a rename and a mishearing are both
+covered. And `live` now needs a noun after it.
+
+**Three more things the same session exposed.**
+
+* **Reference markers were read as figures.** The model emitted its own citations
+  as `【2†L31-L35】`, and the caveat came back reading *"I could not verify these
+  figures: 35, 61, 64, 17, 22"* -- line numbers, and meaningless to anyone reading
+  it. Masked now, and the instruction asks for plain citations instead.
+* **The retrieved block had no ceiling.** Three pages at six thousand characters
+  plus a dozen snippets is over twenty thousand -- roughly five thousand tokens
+  before the persona, conversation and memory. The per-page limit had always been
+  there; the total was what mattered and nothing measured it.
+* **A rejected request said only "(HTTPError)".** `ollama_brain` called
+  `raise_for_status()`, so the user saw the exception class and nothing about the
+  cause -- for a fault that was, in fact, the prompt being too long. It now reads
+  Ollama's own reason and, for the context-length case, names the setting that
+  fixes it.
+
+**Two mutations that could not be observed.** Deleting the bracket-marker rule
+broke nothing, because the line numbers inside those markers were also caught by
+the line-reference rule and the source number was filtered as structure -- so a
+test using the session's own marker could not tell the rule existed. Fixed with a
+marker citing source 12 rather than source 2. And removing the assistant's name
+from the `needs_search` call broke nothing either, because "jarvis" is stripped as
+a shipped name whether or not the configured one is passed; that line only matters
+for a renamed assistant, so it is now pinned by asserting the argument rather than
+a behaviour. Third and fourth time this check has found a passing test that proved
+nothing.
+
+87 checks in `test_statements_and_names.py`. All sixteen applied mutations caught.
+
 ---
 
 ## Operator notes
