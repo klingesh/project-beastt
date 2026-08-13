@@ -68,7 +68,7 @@ def build(tmp_path, monkeypatch):
                 self.gathered = []
 
             def gather(self, question, kind="", max_results=5, read_pages=3,
-                       on_step=None):
+                       on_step=None, name=""):
                 self.gathered.append(question)
                 found = search.Findings(question=question,
                                         kind=kind or search.classify(question),

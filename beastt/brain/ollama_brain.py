@@ -13,6 +13,48 @@ import requests
 from .base import Brain, Message
 
 
+class OllamaError(RuntimeError):
+    """Ollama refused the request, with something worth showing a human."""
+
+
+def _explain(resp) -> str:
+    """Ollama's own reason for refusing, which is usually specific and useful."""
+    try:
+        detail = str((resp.json() or {}).get("error", "")).strip()
+    except Exception:
+        detail = ""
+    if not detail:
+        detail = (resp.text or "").strip()[:200]
+    return detail or f"HTTP {resp.status_code}"
+
+
+def _check(resp) -> None:
+    """Turn a bad status into a readable error rather than a bare HTTPError.
+
+    `raise_for_status()` produced "Hmm, I hit a snag trying to think that through
+    (HTTPError)" -- which names the exception class and nothing about the cause.
+    That reached a user when a long research prompt was rejected, and there was
+    no way to tell from the message that the prompt was the problem.
+
+    Ollama puts a real reason in the body, so it is worth reading. The
+    context-length case gets its own advice because it is the one a user can
+    actually do something about, and it became reachable the moment replies
+    started carrying pages of retrieved text.
+    """
+    if resp.status_code < 400:
+        return
+    detail = _explain(resp)
+    lowered = detail.lower()
+    if any(hint in lowered for hint in ("context", "too long", "token", "exceeds",
+                                        "maximum", "memory", "n_ctx")):
+        raise OllamaError(
+            f"the local model rejected the request as too long ({detail}). "
+            "Try BEASTT_SEARCH_READ_PAGES=1 to send less retrieved text, or a "
+            "model with a larger context window."
+        )
+    raise OllamaError(f"Ollama refused the request ({detail}).")
+
+
 class OllamaBrain(Brain):
     def __init__(self, model: str, base_url: str = "http://localhost:11434", timeout: int = 120):
         self.model = model
@@ -69,7 +111,7 @@ class OllamaBrain(Brain):
         resp = requests.post(
             f"{self.base_url}/api/chat", json=payload, timeout=self.timeout
         )
-        resp.raise_for_status()
+        _check(resp)
         return resp.json().get("message", {}).get("content", "").strip()
 
     def stream(self, messages: List[Message], num_ctx: int = 8192) -> Iterator[str]:
@@ -85,7 +127,7 @@ class OllamaBrain(Brain):
         with requests.post(
             f"{self.base_url}/api/chat", json=payload, stream=True, timeout=self.timeout
         ) as resp:
-            resp.raise_for_status()
+            _check(resp)
             for line in resp.iter_lines():
                 if not line:
                     continue

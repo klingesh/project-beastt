@@ -37,7 +37,13 @@ _TRIGGERS = [
     r"\bfind out\b", r"\bcheck (?:on|for|the)\b", r"\bverify\b", r"\bsource\b",
     # Recency.
     r"\blatest\b", r"\bnewest\b", r"\bmost recent\b", r"\brecent(ly)?\b",
-    r"\bcurrent(ly)?\b", r"\bright now\b", r"\bat the moment\b", r"\blive\b",
+    r"\bcurrent(ly)?\b", r"\bright now\b", r"\bat the moment\b",
+    # "live" has to be qualified. On its own it matched "i live in chennai
+    # jarvis fyi" -- a statement about where someone lives -- and sent it to a
+    # search engine, which found a Chennai housing project called Jarvis and
+    # reported back that the user lived in a Casagrand gated enclave.
+    r"\blive (?:price|prices|score|scores|data|feed|rate|rates|market|quote|"
+    r"quotes|update|updates|stream)\b", r"\bgoing live\b",
     r"\btoday'?s?\b", r"\btonight\b", r"\byesterday\b", r"\btomorrow\b",
     r"\bthis (?:week|month|year|morning|evening)\b",
     r"\blast (?:week|month|night)\b", r"\bso far\b", r"\bup to date\b",
@@ -124,7 +130,79 @@ _LEAD_INS = [
 _LEAD_RE = re.compile("|".join(_LEAD_INS), re.IGNORECASE)
 
 
-def needs_search(text: str) -> bool:
+#: Openers that mark a message as being about the speaker.
+_FIRST_PERSON = re.compile(r"^\s*(?:i|i'?m|im|i'?ve|my|mine|me|we|our|us)\b",
+                           re.IGNORECASE)
+
+#: Anything that turns a first-person sentence back into a request. Generous on
+#: purpose: mistaking a request for a statement costs an answer, while mistaking
+#: a statement for a request only costs a needless search.
+_REQUEST_MARKER = re.compile(
+    r"\?"
+    r"|\b(?:what|whats|which|who|whom|whose|when|where|why|how)\b"
+    r"|\b(?:search|look\s*up|google|find|check|verify|confirm|tell me|show me|"
+    r"give me|get me|send me|explain|compare|recommend|suggest)\b"
+    r"|\b(?:heard|read|saw|is it true|any idea|curious|wondering)\b"
+    r"|\b(?:want to know|wanna know|need to know|would like to know)\b"
+    r"|\b(?:price|prices|cost|rate|rates|quote|worth|value)\b"
+    r"|\b(?:news|latest|update|updates|happening|headlines?)\b",
+    re.IGNORECASE,
+)
+
+#: Names the assistant answers to, which must never end up in a search query.
+_SHIPPED_NAMES = ("jarvis", "beastt", "beast")
+
+
+def _name_pattern(name: str = "") -> "re.Pattern":
+    """Every spelling this assistant answers to, for stripping out of a query."""
+    from .wake import variants_for
+
+    words = set(_SHIPPED_NAMES)
+    if str(name or "").strip():
+        words.update(variants_for(name))
+    ordered = sorted((re.escape(w) for w in words if w), key=len, reverse=True)
+    return re.compile(r"\b(?:" + "|".join(ordered) + r")\b", re.IGNORECASE)
+
+
+def strip_assistant_name(text: str, name: str = "") -> str:
+    """Remove the assistant's own name from a message.
+
+    It has no business in a search query, and leaving it there is not harmless.
+    "i live in chennai jarvis fyi" was searched verbatim, which found a Chennai
+    apartment development called *Jarvis* -- so the answer described the user's
+    home as a Casagrand gated enclave with 469 flats and a 2028 handover, sourced
+    and confidently wrong.
+
+    The lead-in stripping had a hardcoded "beastt" in it and the assistant is
+    called Jarvis, which is exactly the sort of thing that works until somebody
+    renames it.
+    """
+    cleaned = _name_pattern(name).sub(" ", str(text or ""))
+    return re.sub(r"\s+", " ", cleaned).strip(" ,.")
+
+
+def looks_like_statement(text: str, name: str = "") -> bool:
+    """Is this the user telling the assistant something, rather than asking?
+
+    "i live in chennai jarvis fyi" is a fact being offered, and the right thing
+    to do with it is remember it. It was instead researched, and the reply came
+    back describing a housing project of the same name as though it were where
+    the user lived.
+
+    A statement is first-person, has no question mark, and carries none of the
+    words that turn a sentence into a request. "i heard a student was murdered"
+    is deliberately *not* a statement -- hearsay is the clearest possible ask to
+    go and check something.
+    """
+    body = strip_assistant_name(text, name)
+    if not body or not _FIRST_PERSON.match(body):
+        return False
+    return not _REQUEST_MARKER.search(body)
+
+
+def needs_search(text: str, name: str = "") -> bool:
+    if looks_like_statement(text, name):
+        return False
     return bool(_TRIGGER_RE.search(str(text or "")))
 
 
@@ -132,7 +210,7 @@ def is_news(text: str) -> bool:
     return bool(_NEWS_RE.search(str(text or "")))
 
 
-def classify(text: str) -> str:
+def classify(text: str, name: str = "") -> str:
     """What kind of question this is, so it can be researched appropriately.
 
     Asking "what's happening in Tamil Nadu" and "what's Tata Steel trading at"
@@ -142,7 +220,7 @@ def classify(text: str) -> str:
     why the answers read like a shrug.
     """
     text = str(text or "")
-    if not needs_search(text):
+    if not needs_search(text, name):
         return CHAT
 
     from . import quotes
@@ -156,7 +234,7 @@ def classify(text: str) -> str:
     return FACTUAL
 
 
-def extract_query(text: str) -> str:
+def extract_query(text: str, name: str = "") -> str:
     """Turn a natural request into a concise search query.
 
     The lead-in stripping is deliberately conservative about word order: an
@@ -165,7 +243,7 @@ def extract_query(text: str) -> str:
     stocks that has gained", which is not a phrase anybody has ever written down.
     Filler words left stranded by a removal are cleaned up afterwards.
     """
-    query = _LEAD_RE.sub(" ", str(text or ""))
+    query = _LEAD_RE.sub(" ", strip_assistant_name(text, name))
     query = re.sub(r"[?!.]+$", "", query)
     # Tidy up connectives left dangling by the removals above.
     query = re.sub(r"^\s*(?:so|and|but|ok|okay|well|umm?|hey|also)\b[\s,]*", " ",
@@ -176,7 +254,7 @@ def extract_query(text: str) -> str:
     return query or str(text or "").strip()
 
 
-def plan_queries(text: str, kind: str = "") -> List[str]:
+def plan_queries(text: str, kind: str = "", name: str = "") -> List[str]:
     """Several angles on one question, because one search is one opinion.
 
     Asked what is happening somewhere, a single query returns whatever that
@@ -185,8 +263,8 @@ def plan_queries(text: str, kind: str = "") -> List[str]:
     news. Asking for the topic's news, its latest news and its headlines
     separately gets actual outlets.
     """
-    kind = kind or classify(text)
-    topic = extract_query(text)
+    kind = kind or classify(text, name)
+    topic = extract_query(text, name)
     if not topic:
         return []
 
@@ -354,9 +432,44 @@ def format_findings(findings: "Findings", user_name: str = "you") -> str:
         f"RESEARCH FOR THIS QUESTION (searched {len(findings.queries)} way(s), "
         f"{len(findings.sources)} source(s), {read} read in full):"
     )
-    body = "\n\n".join(f"[{i}] {s.as_block()}"
-                       for i, s in enumerate(findings.sources, 1))
+    body = "\n\n".join(_within_budget(findings.sources))
     return f"{header}\n\n{body}\n\n{_instruction_for(findings.kind, user_name)}"
+
+
+#: A ceiling on everything retrieved, across all sources.
+#:
+#: Three pages at 6000 characters plus a dozen snippets came to over twenty
+#: thousand characters -- roughly five thousand tokens of research before the
+#: persona, the conversation and the memory block were added. On an 8k context
+#: that is most of the window, and it showed: a local model rejected the request
+#: outright and the user saw "I hit a snag trying to think that through
+#: (HTTPError)". The per-page limit was never the binding constraint; the total
+#: was, and nothing was measuring it.
+MAX_RESEARCH_CHARS = 12000
+
+
+def _within_budget(sources: List["Source"],
+                   budget: int = MAX_RESEARCH_CHARS) -> List[str]:
+    """Render the sources, trimming later ones so the whole block fits.
+
+    Ordered as the engines ranked them, so what gets cut is what was least
+    promising. A source is always listed even when there is no room left for its
+    text -- knowing a page exists and was not read is worth a line.
+    """
+    blocks: List[str] = []
+    for index, source in enumerate(sources, 1):
+        remaining = budget - sum(len(b) for b in blocks)
+        if remaining <= 0:
+            blocks.append(f"[{index}] {source.title}\n   {source.url}\n"
+                          f"   [not included -- no room left in this request]")
+            continue
+        block = f"[{index}] {source.as_block()}"
+        if len(block) > remaining:
+            cut = block.rfind(" ", 0, remaining)
+            block = block[: cut if cut > remaining // 2 else remaining].rstrip()
+            block += " ... [trimmed to fit]"
+        blocks.append(block)
+    return blocks
 
 
 def _instruction_for(kind: str, user_name: str) -> str:
@@ -374,7 +487,11 @@ def _instruction_for(kind: str, user_name: str) -> str:
         "Where a source is marked as appearing to be from an earlier year, or "
         "carries its own date, give that date beside any figure you take from it "
         "and say plainly that it is not today's. Never present a dated figure as "
-        "current just because you found it."
+        "current just because you found it. "
+        # Some models emit their own reference markers, which arrive as
+        # cite-turn or L-line syntax and read as line noise in a spoken reply.
+        "Cite by naming the outlet in the sentence, or by writing \"(source 2)\" "
+        "in plain text. Do not emit bracketed reference markers or line numbers."
     )
     if kind == NEWS:
         return (
@@ -562,7 +679,8 @@ class WebSearch:
             return ""
 
     def gather(self, question: str, kind: str = "", max_results: int = 5,
-               read_pages: int = 3, on_step=None) -> "Findings":
+               read_pages: int = 3, on_step=None,
+               name: str = "") -> "Findings":
         """Search several ways, read the best pages, and return what was found.
 
         This is the part that was missing. Previously one query was run and its
@@ -570,8 +688,8 @@ class WebSearch:
         returned an encyclopaedia entry about its culture, which duly came back
         as though it were the day's news.
         """
-        kind = kind or classify(question)
-        queries = plan_queries(question, kind)
+        kind = kind or classify(question, name)
+        queries = plan_queries(question, kind, name)
         findings = Findings(question=question, kind=kind, queries=queries)
         if not queries:
             return findings

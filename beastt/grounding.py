@@ -76,6 +76,15 @@ _MASK = re.compile(
         \s+(?:ago|earlier|back|old)                # 40 minutes ago
       # "Aug 13, 2026" and "13 August 2026" -- the trailing year has to be
       # consumed too, or the date is masked and its year survives as a figure.
+      # Reference markers some models emit around their citations. The line
+      # numbers inside them are not claims about the world, but they were read as
+      # figures: a reply citing 【2†L31-L35】 was reported as containing the
+      # unverified figures 31 and 35, which is both wrong and unintelligible to
+      # anyone reading the caveat.
+    | \u3010[^\u3011]{0,80}\u3011                   # 【2†L31-L35】
+    | \[\d{1,3}\u2020[^\]]{0,60}\]                  # [2†L31-L35]
+    | \bL\d{1,5}(?:\s*-\s*L?\d{1,5})?\b             # L31-L35, L31
+    | \[\^?\d{1,3}\]                                # [1], [^2]
     | (?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+
         \d{1,2}(?:st|nd|rd|th)?(?:\s*,?\s*\d{4})?
     | \d{1,2}(?:st|nd|rd|th)?\s+

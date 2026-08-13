@@ -676,7 +676,11 @@ class Assistant:
         just invites the model to average them. News is the exception -- if the
         question asks what is happening, the figure alone doesn't answer it.
         """
-        if self.search is None or not needs_search(text):
+        # The assistant's own name is passed in so it can be stripped before the
+        # question is judged, and so a first-person statement addressed to it
+        # ("i live in chennai jarvis fyi") is recognised as something to
+        # remember rather than something to research.
+        if self.search is None or not needs_search(text, self.config.name):
             return False
         return not series or is_news(text)
 
@@ -725,13 +729,14 @@ class Assistant:
         """Search several ways, read the best pages, and return what was found."""
         from . import search as search_module
 
-        kind = search_module.classify(text)
+        kind = search_module.classify(text, self.config.name)
         try:
             findings = self.search.gather(
                 text, kind=kind,
                 max_results=self.config.search_max_results,
                 read_pages=getattr(self.config, "search_read_pages", 3),
                 on_step=on_step,
+                name=self.config.name,
             )
         except Exception as exc:
             if self._verbose:
