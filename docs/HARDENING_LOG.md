@@ -304,6 +304,30 @@ were caught. Two were instructive:
   later width guard rejects the same input. Defence in depth, confirmed by
   accident.
 
+**Two more tests that failed for the wrong reason**, in the tradition of entry 6,
+both found by running the suite on the laptop rather than the machine it was
+written on:
+
+* **A literal heartbeat timestamp.** One check moved the equity and the heartbeat
+  and asserted the signature had not changed. It wrote the heartbeat as
+  `"2026-08-13T08:59:30+00:00"` — which is a *fresh* heartbeat for fifteen
+  minutes and a stale one for ever afterwards. So it passed where it was written
+  and failed that afternoon, reporting a state change that was really a clock.
+  The heartbeat now moves relatively, like every other one in the suite.
+* **The `.env` leaked into the fixture.** `Config`'s defaults are read from the
+  environment when the class body runs, so a real `.env` is baked in before any
+  test can intervene — monkeypatching afterwards is too late. The fixture named
+  the fields it thought mattered and missed the five provider API keys, so two
+  checks asserting *"a cloud provider with no key is unconfigured"* failed on a
+  machine that had a Groq key, against a provider that was correctly configured.
+  The keys are now blanked from the provider registry itself rather than listed,
+  so a sixth provider cannot reintroduce it, and an autouse fixture fails the run
+  if any real key is ever carried in again.
+
+The shared shape is worth naming: **both passed on the author's machine for
+reasons that had nothing to do with the code.** A suite that only runs in one
+place is only a little better than one that never runs.
+
 **Known gaps are recorded as tests, not comments.** Nineteen checks are marked
 `xfail(strict=True)` with the reason written out: the suite stays green, the bug
 is documented where someone will trip over it, and CI fails the moment it is

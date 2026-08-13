@@ -64,18 +64,37 @@ _stub_requests()
 def config():
     """A Config with a bot configured and everything else quiet.
 
-    `Config`'s field defaults are read from the environment at import time, so a
-    developer's own .env would otherwise leak into the tests. Every field the
-    tests care about is set explicitly here.
+    `Config`'s field defaults are read from the environment **at import time**, so
+    a real .env leaks straight into every test and there is no way to undo it
+    afterwards -- monkeypatching the environment is too late, the class body has
+    already run. Every field the tests depend on therefore has to be named here.
+
+    The first version of this fixture named the fields it thought mattered and
+    missed the five provider API keys, so on a machine with a Groq key in .env
+    two tests asserting "a cloud provider with no key is unconfigured" failed
+    against a provider that was, correctly, configured. The keys are now blanked
+    from the provider registry itself rather than listed, so adding a sixth
+    provider cannot reintroduce it.
     """
     from dataclasses import replace
 
+    from beastt import providers
     from beastt.config import Config
+
+    secrets = {p.key_field: "" for p in providers.PROVIDERS if p.key_field}
 
     return replace(
         Config(),
+        **secrets,
         name="JARVIS",
         user_name="Lingesh",
+        # Pinned because a real .env sets these, and `default_model` in
+        # particular changes which brain the assistant resolves.
+        model="llama3.2",
+        default_model="",
+        ollama_url="http://localhost:11434",
+        request_timeout=300,
+        fred_key="",
         bot_status_repo="klingesh/tradingbot-status",
         bot_status_token="test-token",
         bot_status_file="status.json",
@@ -92,7 +111,33 @@ def config():
         images_enabled=False,
         data_enabled=False,
         github_token="",
+        github_repo="",
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_env_leak(request):
+    """Fail loudly if the `config` fixture ever stops isolating the environment.
+
+    The alternative is what happened the first time: a test that passes for
+    everyone except the person with an API key in their .env, reported as a bug
+    in the code rather than in the test.
+    """
+    yield
+    if "config" not in request.fixturenames:
+        return
+    try:
+        config = request.getfixturevalue("config")
+    except Exception:
+        return
+
+    from beastt import providers
+
+    leaked = [p.id for p in providers.PROVIDERS
+              if p.key_field and getattr(config, p.key_field, "")]
+    assert not leaked, (
+        f"the config fixture is carrying real API keys for {leaked} out of the "
+        "environment; pin them in conftest.config")
 
 
 @pytest.fixture
