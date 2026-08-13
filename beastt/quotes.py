@@ -437,13 +437,28 @@ def no_quote_prompt(problems: List[str], user_name: str = "you") -> str:
 
 
 def ranked_list_prompt(user_name: str = "you") -> str:
-    """For "top gainers", which no per-symbol source can answer."""
+    """For "top gainers", which no per-symbol source here can answer.
+
+    The first version of this said flatly "do NOT produce a ranked list". That
+    was aimed at the right failure -- a fabricated table of five gainers with
+    two-decimal percentages -- but it was the wrong rule, and in practice the
+    model half-ignored it anyway. When a real page has been read, the figures on
+    it are worth having; what went wrong was presenting a page from **August
+    2024** as the day's biggest movers.
+
+    So the instruction is no longer "don't answer". It is "answer, and date it".
+    A list from a named page with its date is useful. The same list implied to be
+    live is not, and that distinction is the whole of the problem.
+    """
     return (
-        f"[{user_name} asked for a ranked list of movers (gainers/losers). That "
-        f"needs a market screener, which is not available here -- individual "
-        f"quotes are. Do NOT produce a ranked list with figures: an invented "
-        f"table of five gainers with two-decimal percentages is the exact failure "
-        f"being avoided. Say that you can't pull a live screener, offer to quote "
-        f"specific stocks by name instead, and point at the NSE 'Top Gainers' "
-        f"page, Moneycontrol or TradingView for the full list.]"
+        f"[{user_name} asked for a ranked list of movers (gainers/losers). There "
+        f"is no live market screener available here, so you cannot state today's "
+        f"list as fact.\n"
+        f"If the researched pages above contain movers, you may report them -- but "
+        f"only with the name of the page and the date it carries, and only if you "
+        f"say plainly that it is that page's snapshot rather than live data. If a "
+        f"page is marked as appearing to be from an earlier year, lead with that.\n"
+        f"If the pages contain no movers, say you couldn't pull a screener. Either "
+        f"way, do NOT invent percentages, and point {user_name} at the NSE 'Top "
+        f"Gainers' page, Moneycontrol or TradingView for the live list.]"
     )

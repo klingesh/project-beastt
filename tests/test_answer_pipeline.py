@@ -122,7 +122,8 @@ class TestTheFabricatedMoversList:
 
         prompt = "\n".join(m.content for m in brain.calls[0])
         assert "ranked list of movers" in prompt
-        assert "Do NOT produce a ranked list" in prompt
+        assert "no live market screener" in prompt
+        assert "do NOT invent percentages" in prompt
 
     def test_a_fabricated_list_is_not_returned_as_given(self, build):
         """The model is asked again, with the invented figures named."""

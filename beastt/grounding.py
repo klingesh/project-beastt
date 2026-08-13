@@ -55,6 +55,41 @@ _UNIT_AFTER = re.compile(
 #: however small it is.
 TRIVIAL_BELOW = 10.0
 
+#: Dates and times are masked out before figures are extracted.
+#:
+#: They are not claims of the kind this checks. Worse, they produced a visibly
+#: wrong caveat on an otherwise good answer: a news roundup written as "Daily
+#: Thanthi (about 40 minutes ago) noted an eight-hour power outage" was reported
+#: as containing the unverified figure "40". The assistant had computed that
+#: interval itself from the page's timestamp; there was nothing to verify.
+#:
+#: The clock and calendar forms matter as much. "as of 2026-08-13 10:23 UTC"
+#: yielded 2026, 13, 10 and 23 as separate figures, which passed only because the
+#: quote block happened to contain the same digits. A reply that reformatted the
+#: same timestamp would have been flagged for it.
+_MASK = re.compile(
+    r"""
+      \d{4}-\d{2}-\d{2}                            # 2026-08-13
+    | \d{1,2}[/-]\d{1,2}[/-]\d{2,4}                # 13/08/2026
+    | \d{1,2}:\d{2}(?::\d{2})?                     # 10:23, 15:59:07
+    | \d+\s*(?:second|sec|minute|min|hour|hr|day|week|month|year)s?
+        \s+(?:ago|earlier|back|old)                # 40 minutes ago
+      # "Aug 13, 2026" and "13 August 2026" -- the trailing year has to be
+      # consumed too, or the date is masked and its year survives as a figure.
+    | (?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+
+        \d{1,2}(?:st|nd|rd|th)?(?:\s*,?\s*\d{4})?
+    | \d{1,2}(?:st|nd|rd|th)?\s+
+        (?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?
+        (?:\s*,?\s*\d{4})?
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _mask_dates(text: str) -> str:
+    """Blank out dates and clock times, keeping the string length the same."""
+    return _MASK.sub(lambda m: " " * len(m.group(0)), str(text or ""))
+
 #: Two figures match if they are equal to within this, relatively. Covers a
 #: source printing 184.6 where the reply says 184.60, without letting 184 pass
 #: for 185.
@@ -75,7 +110,7 @@ def figures(text: str) -> List[str]:
     flagging "here are 5 stocks" would drown the real signal. Anything carrying
     money or a unit is kept regardless of size.
     """
-    text = str(text or "")
+    text = _mask_dates(text)
     found: List[str] = []
     for match in _NUMBER_RE.finditer(text):
         raw = match.group(0).rstrip(",")

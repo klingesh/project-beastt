@@ -69,11 +69,26 @@ class TestRankedLists:
     def test_single_quotes_are_not_screener_questions(self, text):
         assert quotes.is_ranked_list(text) is False
 
-    def test_the_refusal_names_the_exact_failure(self, ):
+    def test_a_screener_list_must_be_dated_not_refused(self):
+        """The rule changed after the first live run.
+
+        Flatly forbidding a list was aimed at the right failure -- an invented
+        table of five gainers -- but it was the wrong rule, and the model
+        half-ignored it anyway. When a real page has been read its figures are
+        worth having; what went wrong was presenting a page from August 2024 as
+        the day's biggest movers. So: report it, name the page, give its date.
+        """
         note = quotes.ranked_list_prompt("Lingaa")
-        assert "Do NOT produce a ranked list" in note
-        assert "five gainers" in note
+
+        assert "no live market screener" in note
+        assert "the date it carries" in note
+        assert "that page's snapshot rather than live data" in note
+        assert "do NOT invent percentages" in note
         assert "TradingView" in note
+
+    def test_it_says_to_lead_with_a_stale_page(self):
+        note = quotes.ranked_list_prompt("Lingaa")
+        assert "earlier year, lead with that" in note
 
 
 # --- working out what was asked about --------------------------------------
