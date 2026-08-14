@@ -249,6 +249,51 @@ class LongTermMemory:
         self.save()
         return True
 
+    def remember_statement(self, statement, ) -> List[str]:
+        """Store a fact offered in conversation, replacing what it contradicts.
+
+        Returns the facts it displaced, so the caller can say what changed.
+
+        The replacing is the part that matters, and the reason `add()` alone was
+        not enough. Told "i live in chennai" after a stored "Lingaa lives with
+        Prahadhesvaryaa K S", `add()` kept both -- their token overlap is 0.67,
+        under the 0.80 merge threshold -- and recall then returned the pair, which
+        is how "where do i live" came back answering who with and not where.
+
+        Facts sharing a `key` are alternatives, so the newest wins. Facts without
+        one accumulate, because somebody can own two laptops but does not live in
+        two cities.
+        """
+        text = " ".join(str(getattr(statement, "text", statement) or "").split())
+        key = str(getattr(statement, "key", "") or "")
+        if len(text) < 3:
+            return []
+
+        replaced: List[str] = []
+        if key:
+            from .statements import infer_key
+
+            keep = []
+            for fact in self.facts:
+                # Keys are new, so anything already on disk has none and its key
+                # has to be read back off the sentence. Without that, superseding
+                # would work perfectly in tests and never once on a real install.
+                existing = fact.get("key") or infer_key(fact["text"])
+                if existing == key and fact["text"] != text:
+                    replaced.append(fact["text"])
+                else:
+                    keep.append(fact)
+            self.facts = keep
+
+        self.add(text)
+        # add() may have merged into an existing entry, so find it by text.
+        for fact in self.facts:
+            if fact["text"] == text:
+                fact["key"] = key
+                break
+        self.save()
+        return replaced
+
     def forget(self, query: str) -> List[str]:
         """Remove facts matching a query. Returns the removed fact texts."""
         q = _tokens(query)

@@ -314,7 +314,12 @@ class Assistant:
         #    the brain. Everything retrieved is kept so the reply's figures can be
         #    checked against it afterwards.
         self.memory.add_user(text)
+        # Capture before the context is built, so a fact offered this turn is
+        # already known when the reply is composed rather than a turn late.
+        captured = self._capture_statement(text)
         messages = self._context_for(text)
+        if captured:
+            messages = [*messages, Message(role="system", content=captured)]
         sources: List[str] = []
 
         series, data_problem = self._data_attempt(text)
@@ -492,7 +497,11 @@ class Assistant:
                 return
             # Planning didn't work out; fall through to a plain reply.
 
+        captured = self._capture_statement(text)
         messages = self._context_for(text)
+        if captured:
+            yield {"type": "status", "text": "Noted that"}
+            messages = [*messages, Message(role="system", content=captured)]
         series, data_problem = self._data_attempt(text)
         if series:
             from . import data
@@ -823,6 +832,58 @@ class Assistant:
             ),
         )
         return [messages[0], note, *messages[1:]]
+
+    def _capture_statement(self, text: str):
+        """Record a fact the user just offered, or drop one they just denied.
+
+        Deterministic and immediate. Facts used to be written only by
+        `remember_session()`, which needs a model call and a graceful exit -- and
+        which the web interface never called at all, so nothing said in a browser
+        was ever remembered. Told "i live in chennai" and asked, after a restart,
+        where they lived, the assistant answered from a fact invented months
+        earlier and said it did not know the location.
+
+        Returns a note for the model, or "", so a capture can be acknowledged
+        rather than being silently magical. The user in that session restarted and
+        re-asked, which is what someone does when they are not sure it landed.
+        """
+        if self.longterm is None:
+            return ""
+        from . import statements
+
+        name = self.config.name
+        try:
+            denied = statements.denial_from(text, name)
+            if denied:
+                removed = self.longterm.forget(denied)
+                if removed:
+                    if self._verbose:
+                        print(f"[memory] forgot {len(removed)}: {removed}")
+                    listed = "; ".join(removed[:3])
+                    return (f"[You have just removed this from your notes about "
+                            f"{self.config.user_name}: {listed}. Acknowledge the "
+                            f"correction briefly and do not repeat the old "
+                            f"version.]")
+                return ""
+
+            statement = statements.fact_from(text, self.config.user_name, name)
+            if statement is None:
+                return ""
+            replaced = self.longterm.remember_statement(statement)
+        except Exception as exc:
+            # Remembering is a convenience. A turn must not fail over it.
+            print(f"[memory] couldn't record that: {exc.__class__.__name__}: {exc}")
+            return ""
+
+        if self._verbose:
+            print(f"[memory] {statements.describe(statement, replaced)}")
+        note = (f"[You have just noted this about {self.config.user_name}: "
+                f"{statement.text}. Acknowledge it naturally in one short clause "
+                f"-- do not say you have saved a note or updated a memory file.]")
+        if replaced:
+            note = note[:-1] + (f" It replaces what you previously had: "
+                                f"{'; '.join(replaced[:2])}.]")
+        return note
 
     def _augment_with_memories(self, text: str, messages):
         """Prepend what BEASTT remembers about the user, when relevant."""

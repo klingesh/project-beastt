@@ -126,6 +126,46 @@ class _State:
                 self._assistants[chat_id] = found
             return found
 
+    #: Assistant turns between reflections. Reflection costs one model call, so
+    #: it cannot run every turn -- but it has to run *sometimes*, and it never
+    #: did: remember_session() is called from four places in cli.py and nowhere
+    #: else, so a conversation held entirely in this interface wrote no durable
+    #: facts at all. Every fact the browser produced was lost.
+    REFLECT_EVERY = 6
+
+    def reflect_later(self, chat: Dict, assistant) -> None:
+        """Distil durable facts from this conversation, in the background.
+
+        On a timer rather than at the end, because a web chat has no end -- the
+        tab is closed, or the machine sleeps, and there is no exit hook to hang
+        this on. The CLI's end-of-session reflection has the same flaw for the
+        same reason: `taskkill /F` is in the documented restart procedure.
+
+        Runs on a daemon thread so the reply is already on screen, and never
+        raises: a failure here must not disturb the conversation that caused it.
+        """
+        if getattr(assistant, "longterm", None) is None:
+            return
+        turns = sum(1 for m in chat.get("messages", [])
+                    if m.get("role") == "assistant")
+        if turns < 2 or turns % self.REFLECT_EVERY:
+            return
+        if getattr(assistant, "_reflecting", False):
+            return          # one at a time; they would only fight over the file
+
+        def work() -> None:
+            try:
+                added = assistant.remember_session()
+                if added:
+                    print(f"[memory] remembered {added} thing(s) from this chat.")
+            except Exception as exc:
+                print(f"[memory] reflection failed: {exc.__class__.__name__}")
+            finally:
+                assistant._reflecting = False
+
+        assistant._reflecting = True
+        threading.Thread(target=work, name="reflect", daemon=True).start()
+
     def forget(self, chat_id: str) -> None:
         with self._lock:
             self._assistants.pop(chat_id, None)
@@ -539,6 +579,8 @@ class Handler(BaseHTTPRequestHandler):
             # memory may be missing this turn. Drop it and let the next request
             # rebuild it from the saved transcript.
             self.state.forget(chat["id"])
+        else:
+            self.state.reflect_later(chat, assistant)
 
 
 def serve(config: Optional[Config] = None, port: int = 8765,
