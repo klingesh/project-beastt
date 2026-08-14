@@ -57,6 +57,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
         "--port", type=int, default=None, help="Port for the chat interface."
     )
     p.add_argument(
+        "--watch-log",
+        action="store_true",
+        help="Open a live view of what the background service is doing.",
+    )
+    p.add_argument(
         "--no-browser",
         action="store_true",
         help="Start the interface but don't open a browser window.",
@@ -357,6 +362,41 @@ def _open_text_window(config: Config) -> bool:
         return False
 
 
+def _warn_if_already_listening() -> list:
+    """Warn when a background service is already on the microphone.
+
+    Two listeners on one microphone is worse than either alone: each grabs the
+    input stream in turn, so a wake word lands in whichever happened to be
+    recording and the other hears the silence. The symptom is intermittent
+    deafness -- which is indistinguishable from the wake word simply not working,
+    and is the state someone is in the moment they open a terminal to find out
+    why the service seems deaf.
+
+    A warning rather than a refusal: running a second copy on purpose, to watch
+    it, is a legitimate thing to want. It just needs saying out loud.
+    """
+    try:
+        from .status import _running
+
+        pids = _running()
+    except Exception:
+        return []
+    if not pids:
+        return []
+
+    print("\n[wake] WARNING: a background service is already listening "
+          f"(pid {', '.join(pids)}).")
+    print("       Two listeners share one microphone badly -- each takes it in "
+          "turn, so")
+    print("       whichever is not recording misses you. Waking will be "
+          "unreliable until")
+    print("       one of them stops.")
+    print("       To watch the one already running instead:  "
+          "python main.py --watch-log")
+    print("       To stop it:  taskkill /F /IM pythonw.exe\n")
+    return pids
+
+
 def _toast_wake(config: Config, greeting: str) -> None:
     """A desktop notification as well as the spoken greeting.
 
@@ -396,6 +436,11 @@ def _run_standby(config: Config, verbose: bool) -> None:
     if config.stt_model != config.wake_model:
         chat_stt = SpeechToText(model=config.stt_model, speaker_verifier=verifier)
 
+    #: One log window per standby run. There is no way to tell whether a window
+    #: the user closed is still open, so opening one on every wake would bury the
+    #: screen in consoles after a busy afternoon.
+    console_opened = False
+
     wake_words = config.wake_words()
     print(f"\n[wake] Standby. Call \"{config.name}\" whenever you need me.")
     print(f"       (Listening for: {', '.join(wake_words)})")
@@ -434,6 +479,13 @@ def _run_standby(config: Config, verbose: bool) -> None:
         if tts:
             tts.say(greeting)
         _toast_wake(config, greeting)
+
+        if getattr(config, "wake_console", False) and not console_opened:
+            from . import logview
+
+            if logview.open_window(config):
+                console_opened = True
+                print("[wake] Opened a window showing what I'm doing.")
 
         # Decide how to converse.
         mode = config.on_wake
@@ -535,6 +587,13 @@ def run(argv=None) -> None:
     verbose = not args.quiet
 
     # Diagnostics, then exit.
+    if args.watch_log:
+        # Before the banner: this window is a log viewer, and a banner above the
+        # log just pushes the interesting part off the top.
+        from . import logview
+
+        return logview.run(config)
+
     if args.status:
         from .status import report
 
@@ -586,6 +645,9 @@ def run(argv=None) -> None:
 
     # Standby mode manages its own assistants per conversation.
     if args.wake:
+        # Only in the foreground. The service reaches _run_standby directly, and
+        # would otherwise warn about itself on every restart.
+        _warn_if_already_listening()
         _run_standby(config, verbose)
         return
 
