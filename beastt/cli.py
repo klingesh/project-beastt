@@ -52,7 +52,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
         help="Open the chat interface in your browser (multiple conversations).",
     )
     p.add_argument(
-        "--port", type=int, default=8765, help="Port for the chat interface."
+        # No default here: it comes from BEASTT_UI_PORT via the config, so a
+        # hardcoded 8765 would silently override the setting.
+        "--port", type=int, default=None, help="Port for the chat interface."
     )
     p.add_argument(
         "--no-browser",
@@ -66,9 +68,10 @@ def _parse_args(argv=None) -> argparse.Namespace:
     )
     p.add_argument(
         "--on-wake",
-        choices=["ask", "voice", "text"],
+        choices=["ask", "voice", "text", "ui"],
         default=None,
-        help="What to do after waking (default: ask).",
+        help="What to do after waking: ask, voice, text, or ui (open the chat "
+             "in a browser). Default: ask.",
     )
     p.add_argument(
         "--model", default=None, help="Override the Ollama model (e.g. qwen3, phi4)."
@@ -137,6 +140,8 @@ def _build_config(args: argparse.Namespace) -> Config:
         config.speaker_only = False
     if args.on_wake:
         config.on_wake = args.on_wake
+    if args.port:
+        config.ui_port = args.port
     # Standby mode always needs the mic.
     if args.wake:
         config.voice_enabled = True
@@ -198,18 +203,24 @@ def _build_verifier(config: Config, announce: bool = True):
 
 
 # --- the conversation ------------------------------------------------------
-def _chat_session(assistant: Assistant, config: Config, tts, stt) -> None:
+def _chat_session(assistant: Assistant, config: Config, tts, stt,
+                  greeted: bool = False) -> None:
     """Run one conversation until the user says goodbye.
 
     `stt` is None for a typed session. Returns when the chat ends; the caller
     decides whether to exit or go back to standby.
+
+    `greeted` says the user has already been welcomed -- standby now acknowledges
+    the wake word by name, and greeting twice in three seconds sounds like a
+    stutter rather than warmth.
     """
     assistant.voice_mode = stt is not None and getattr(stt, "available", False)
 
-    greeting = assistant.welcome()
-    print(f"\n{config.name}: {greeting}\n")
-    if tts:
-        tts.say(greeting)
+    if not greeted:
+        greeting = assistant.welcome()
+        print(f"\n{config.name}: {greeting}\n")
+        if tts:
+            tts.say(greeting)
 
     while True:
         try:
@@ -346,9 +357,28 @@ def _open_text_window(config: Config) -> bool:
         return False
 
 
+def _toast_wake(config: Config, greeting: str) -> None:
+    """A desktop notification as well as the spoken greeting.
+
+    Belt and braces, and cheap. If the speakers are muted, or the TTS voice
+    failed to load, or the user is wearing headphones plugged into something
+    else, the spoken acknowledgement is invisible -- and this whole feature
+    exists because an invisible acknowledgement is indistinguishable from not
+    being heard.
+    """
+    try:
+        from .botwatch import safe_for_toast
+        from .notify import toast
+
+        toast(str(getattr(config, "name", "BEASTT")), safe_for_toast(greeting))
+    except Exception:
+        pass
+
+
 def _run_standby(config: Config, verbose: bool) -> None:
     """Idle listening for the wake word; start a chat when called."""
     from .notify import chime_sleep, chime_wake
+    from .personality import wake_greeting
     from .voice import SpeechToText, TextToSpeech
     from .wake import detect
 
@@ -391,11 +421,41 @@ def _run_standby(config: Config, verbose: bool) -> None:
         print(f"[wake] Heard you: {heard!r}")
         chime_wake()  # audible "I'm listening", since there may be no window
 
+        # Say their name back, immediately, before deciding anything.
+        #
+        # This is the whole answer to "I say Jarvis and it stays silent". A beep
+        # confirms that *something* happened; being greeted by name confirms that
+        # the name was recognised and that it was recognised as them -- which is
+        # the question actually being asked. Previously the first words spoken
+        # were "would you like to talk by voice, or by text?", which is a fine
+        # question and a poor acknowledgement.
+        greeting = wake_greeting(config.user_name)
+        print(f"{config.name}: {greeting}")
+        if tts:
+            tts.say(greeting)
+        _toast_wake(config, greeting)
+
         # Decide how to converse.
         mode = config.on_wake
-        if mode not in ("voice", "text"):
+        if mode not in ("voice", "text", "ui"):
             mode = _ask_mode(config, tts, wake_stt)
         print(f"[wake] Starting {mode} chat.")
+
+        # Straight to the browser. The interface is where most of the work
+        # happens anyway, and a spoken greeting plus a window appearing is
+        # unambiguous feedback in a way that a beep never was.
+        if mode == "ui":
+            from . import uilaunch
+
+            ok, spoken = uilaunch.ensure(getattr(config, "ui_port", 8765))
+            if ok and remainder:
+                spoken += " Ask me your question in there."
+            print(f"{config.name}: {spoken}")
+            if tts:
+                tts.say(spoken)
+            chime_sleep()
+            print(f"[wake] Back on standby. Call \"{config.name}\" anytime.\n")
+            continue
 
         # Headless (background service): a text chat needs its own window.
         if mode == "text" and os.environ.get("BEASTT_HEADLESS") == "1":
@@ -427,7 +487,9 @@ def _run_standby(config: Config, verbose: bool) -> None:
                 session_tts.say(reply)
             _continue_session(assistant, config, session_tts, session_stt)
         else:
-            _chat_session(assistant, config, session_tts, session_stt)
+            # Already greeted by name a moment ago, so don't do it again.
+            _chat_session(assistant, config, session_tts, session_stt,
+                          greeted=True)
 
         chime_sleep()
         print(f"\n[wake] Back on standby. Call \"{config.name}\" anytime.\n")
@@ -486,7 +548,11 @@ def run(argv=None) -> None:
         if args.uninstall_startup:
             autostart.uninstall()
         else:
-            extra = "--on-wake voice" if config.on_wake == "voice" else ""
+            # Bake in whichever mode is configured, not just "voice". A launcher
+            # that silently drops the setting is how "ask" came back after
+            # someone had chosen otherwise.
+            extra = (f"--on-wake {config.on_wake}"
+                     if config.on_wake in ("voice", "text", "ui") else "")
             # Only enable the voice lock in the installed command when it was
             # explicitly asked for; it's off by default because a mismatch
             # silently stops the assistant from responding at all.
@@ -515,7 +581,7 @@ def run(argv=None) -> None:
     if args.ui:
         from .webui import serve
 
-        serve(config, port=args.port, open_browser=not args.no_browser)
+        serve(config, port=config.ui_port, open_browser=not args.no_browser)
         return
 
     # Standby mode manages its own assistants per conversation.

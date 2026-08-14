@@ -65,7 +65,13 @@ class Config:
     # Wake word / standby mode
     wake_model: str = _get("BEASTT_WAKE_MODEL", "tiny")   # small+fast for standby
     # What to do once woken: ask | voice | text
+    #: What happens once the wake word is heard: ask | voice | text | ui.
+    #: "ui" greets you out loud and opens the chat interface in a browser, which
+    #: is the least ambiguous feedback available -- a spoken greeting alone is
+    #: invisible if the speakers are muted.
     on_wake: str = _get("BEASTT_ON_WAKE", "ask").lower()
+    #: Port the chat interface listens on, so waking can open the right address.
+    ui_port: int = int(_get("BEASTT_UI_PORT", "8765"))
     # Extra spellings to accept as the wake word (comma separated).
     extra_wake_words: str = _get("BEASTT_WAKE_WORDS", "")
 
