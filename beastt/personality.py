@@ -94,3 +94,30 @@ _GREETINGS = [
 def welcome_message(user_name: str) -> str:
     """A friendly spoken welcome when BEASTT starts up."""
     return random.choice(_GREETINGS).format(user=user_name)
+
+
+#: Said the instant the wake word is recognised.
+#:
+#: Short on purpose. This is not the start of a conversation, it is an
+#: acknowledgement -- and the reason it exists is that there was not one. Running
+#: as a background service there is no window to watch, and the only signal that
+#: the name had been heard was a beep, followed by a question about whether to
+#: talk by voice or by text. So a user who called out and heard nothing had no way
+#: to tell "it did not hear me" from "it heard me and is deciding" from "it heard
+#: somebody else and ignored them" -- and the answer was usually the first.
+#:
+#: Using their name matters more than the words around it: it confirms not only
+#: that something was heard but that it was recognised as them.
+_WAKE_GREETINGS = [
+    "Hey {user}, how are you doing?",
+    "Yes {user}, I'm here. What do you need?",
+    "Hey {user}. What can I do for you?",
+    "I'm listening, {user}.",
+    "Hey {user}, go ahead.",
+    "Yes {user}? I'm right here.",
+]
+
+
+def wake_greeting(user_name: str) -> str:
+    """A short spoken acknowledgement, so the user knows they were heard."""
+    return random.choice(_WAKE_GREETINGS).format(user=user_name or "there")
