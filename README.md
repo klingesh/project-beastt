@@ -91,6 +91,87 @@ python main.py --voice
 > **Note:** we use `sounddevice` rather than PyAudio because it bundles its own
 > audio engine — no C++ compiler needed, which matters on Windows / new Pythons.
 
+## 👋 Knowing it heard you
+
+Running as a background service there is no window to watch, so being called by
+name used to produce a single beep and then a question about whether you wanted
+voice or text. Calling out and hearing nothing was indistinguishable from not
+being heard at all.
+
+Now the moment it recognises its name it **greets you by name**, out loud and as a
+desktop notification:
+
+> *"Hey Lingaa, how are you doing?"*
+
+Using your name is the point: it confirms not just that something was heard, but
+that it was recognised as **you** — which is what the voice lock decides, and a
+common reason for silence.
+
+Then `BEASTT_ON_WAKE` decides where that leads:
+
+| Setting | What happens when you say its name |
+| --- | --- |
+| `ask` | greets you, then asks whether you want voice or text |
+| `voice` | greets you and starts talking |
+| `text` | greets you and opens a console to type in |
+| `ui` | greets you and **opens the chat interface in your browser** |
+
+`ui` is the least ambiguous: a window appearing is feedback you cannot miss even
+with the speakers muted. It reuses the interface if it is already running rather
+than trying to start a second copy on the same port.
+
+```bash
+BEASTT_ON_WAKE=ui
+BEASTT_UI_PORT=8765
+```
+
+### Watching what it's doing
+
+The background service has no window, so there is nothing to look at. This opens
+one — a live view of its log, wake attempts and all:
+
+```bash
+python main.py --watch-log
+```
+
+```
+[wake] (heard, not my name: 'Jaros.')
+[wake] Heard you: 'Jarvis.'
+Jarvis: Yes Lingaa, I'm here. What do you need?
+[ui] Already running on http://127.0.0.1:8765
+```
+
+It is only a viewer — closing it doesn't stop the assistant, and it doesn't touch
+the microphone. To get one automatically whenever you're heard:
+
+```bash
+BEASTT_WAKE_CONSOLE=on
+```
+
+> **One listener at a time.** Running `python main.py --wake` while the background
+> service is also running puts two processes on one microphone: each takes it in
+> turn, so whichever isn't recording misses you. The symptom is intermittent
+> deafness — which looks exactly like the wake word not working. It now warns you
+> when this happens, and `--watch-log` is the conflict-free way to watch.
+
+### If it still never answers
+
+Run it in a **visible** console and watch every attempt, including the misses:
+
+```bash
+python main.py --wake
+```
+
+If your voice never appears at all, the voice lock is a likely culprit — it fails
+silently by design. Prove it by turning it off for one run:
+
+```bash
+python main.py --wake --no-voice-lock
+```
+
+If that works and the locked version doesn't, teach it some other voices to
+compare against: `python main.py --enroll-other`.
+
 ## 🔐 Voice lock (advanced, optional)
 
 > **Off by default, and worth skipping.** Speaker verification is genuinely
@@ -700,7 +781,7 @@ pip install pytest
 pytest
 ```
 
-1517 checks, about three seconds. They need **no** model, no network, no API keys
+1546 checks, about five seconds. They need **no** model, no network, no API keys
 and no optional packages — every function they cover is pure, and
 `tests/conftest.py` stubs `requests` if it isn't installed (the stub raises if
 anything tries to make a real request).
@@ -730,6 +811,7 @@ What they cover, and why these functions in particular:
 | `search.strip_assistant_name` | its own name never reaches a search engine |
 | `statements.fact_from` | "i live in chennai" is remembered as it is said, and survives a restart |
 | `personality.wake_greeting` / `uilaunch` | calling its name produces something you can notice |
+| `logview` | you can watch the service without becoming a second one |
 
 Nineteen of those checks are marked `xfail(strict=True)`: known bugs, written out
 as the behaviour that *should* hold, with the cause in the reason string. The

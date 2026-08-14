@@ -72,6 +72,12 @@ class Config:
     on_wake: str = _get("BEASTT_ON_WAKE", "ask").lower()
     #: Port the chat interface listens on, so waking can open the right address.
     ui_port: int = int(_get("BEASTT_UI_PORT", "8765"))
+    #: Also open a console showing the service's activity when woken. Off by
+    #: default -- most people want the browser, not a log -- but it is the answer
+    #: to "is it even alive", which is otherwise only visible by stopping the
+    #: service and running it by hand.
+    wake_console: bool = _get("BEASTT_WAKE_CONSOLE", "off").lower() in (
+        "on", "true", "1", "yes")
     # Extra spellings to accept as the wake word (comma separated).
     extra_wake_words: str = _get("BEASTT_WAKE_WORDS", "")
 
