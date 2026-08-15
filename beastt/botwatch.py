@@ -41,7 +41,11 @@ from .paths import resolve
 STATE_FILE = "beastt_memory/botwatch.json"
 
 #: States that warrant interrupting someone.
-BAD = ("halted", "stale", "paused")
+#: States worth alerting about. `bot_stopped` and `not_publishing` are the two
+#: halves of what `stale` used to mean, and leaving them out of here would have
+#: been the quietest possible regression: the watcher would have gone silent on a
+#: dead bot, which is the one thing it exists for.
+BAD = ("halted", "stale", "bot_stopped", "not_publishing", "paused")
 
 
 def _now() -> datetime:
@@ -156,6 +160,15 @@ def _describe(health, status: Dict[str, Any]) -> List[str]:
         reason = str(status.get("halt_reason") or "kill switch fired")
         return [f"Trading bot HALTED — {reason}. It will take no new entries "
                 "until you clear it on the VPS."]
+    if health.state == "bot_stopped":
+        return ["Trading bot has stopped. The VPS is still publishing, so it is "
+                "the bot itself — restart it on the VPS."]
+    if health.state == "not_publishing":
+        # No duration in the text: this becomes a toast, and the exact age is in
+        # the full report for anyone who asks. What matters here is which window.
+        return ["Trading bot status is no longer being published — the publisher "
+                "on the VPS has stopped. The bot may still be trading; check its "
+                "log before restarting anything."]
     if health.state == "stale":
         return ["Trading bot is not reporting. Either it or the status publisher "
                 "has stopped — check both windows on the VPS."]
@@ -210,7 +223,8 @@ def check_once(config: Config, remind_minutes: Optional[float] = None) -> List[s
     except Exception:
         return []
     else:
-        health = trading.assess(config, status)
+        publish_age = trading.publish_age_if_needed(config, status)
+        health = trading.assess(config, status, publish_age)
 
     remind = (remind_minutes if remind_minutes is not None
               else float(getattr(config, "bot_remind_minutes", 60) or 60))

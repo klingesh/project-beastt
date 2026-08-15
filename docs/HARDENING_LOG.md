@@ -837,6 +837,81 @@ just started a process to do it. The call itself is now what is asserted.
 
 ---
 
+## 10. "Either the bot has stopped, or the publisher has" — and it was the publisher
+
+**Symptom.** The monitor working exactly as designed, and being no help:
+
+> Bot: NOT REPORTING — last heartbeat 25.6 hours ago
+> Note: Either the bot has stopped, or the publisher on the VPS has.
+> Note: Worth checking both windows are still running.
+
+The bot was **fine**. It had been evaluating all eight instruments on schedule for
+fourteen hours after the last push, and `C:\Tradingbot\logs\status.json` was being
+rewritten every cycle. Only the publisher had died — at `10:05:26`, one second
+after its last successful push. `publisher_service.log` stopped at the same second
+and `bot.log` carried on.
+
+**A wrong inference on the way there, which is the more useful half of this entry.**
+The argument used was: the final push (`10:05:25Z`) carried a heartbeat from
+`10:05:13.268Z`, twelve seconds earlier, and two processes falling silent twelve
+seconds apart means one event took both down. It sent the user to Event Viewer
+looking for a shutdown that had never happened.
+
+The flaw: **the last push is always a successful push, so the heartbeat inside it
+is always fresh.** A publisher dying alone leaves an identical fingerprint. The
+twelve seconds were evidence of nothing at all — they are the signature of a
+healthy push, and the final push is always healthy. It looked like a deduction
+because it involved two timestamps and a subtraction.
+
+**Fix.** `trading.stale_verdict()` compares the age of the last push against the
+age of the heartbeat inside it, and the asymmetry only runs one way:
+
+* pushes continued long after the heartbeat froze → **the bot stopped.** Certain,
+  because a dead publisher cannot push. The VPS and its network are cleared by
+  deduction, and the report says so.
+* both stopped together → **the publishing side stopped.** The report says the bot
+  *may still be running and trading*, and says to check its log before restarting
+  it — a healthy bot four days up should not be restarted to fix a publisher.
+
+What it refuses to do is name which of publisher, VPS or network. From a laptop
+those are one indistinguishable event, and picking one is the same guess as
+before, pointed the other way.
+
+`fetch_publish_age()` is one extra request, spent only once a heartbeat has
+actually gone quiet, and it **never raises** — without it the report falls back to
+the old wording, which was vague but true. The monitor is what someone reaches for
+when things are already broken; it must not gain a new way to fail. It caches the
+commit *time*, not the age: a cached age is a number that was true a minute ago,
+which is the exact class of bug the feature exists to detect.
+
+Three decisions worth keeping:
+
+* **The `SILENT` tuple.** Three reports suppress the "(heartbeat ...)" suffix for
+  a state whose headline already carries the age. That was keyed on the single
+  string `"stale"`, so adding states would have silently switched it back on.
+* **Both new states added to `botwatch.BAD`.** Leaving them out would have been
+  the quietest possible regression — the watcher would have stopped alerting on a
+  dead bot with every test still green. `test_botwatch` now reads the producible
+  states out of the source with `ast` and requires each to be classified.
+* **One threshold, not two.** `publish_age_if_needed()` asks at `<= stale_after`
+  and `assess` calls stale at `> stale_after`. Split across three call sites those
+  would drift, leaving a state reported as stale and never explained.
+
+**Five mutations were not caught, and all five were real.** Three were the same
+mistake three times: the call sites in the skill, the watcher and `--status` all
+still compiled and reported happily while passing `None`, which is this project's
+signature failure (lesson 11) and its fourth occurrence. The fourth was the ask
+threshold's `<=`, which no single-value test could pin — it is now asserted
+*against* `assess`'s own verdict across a range of ages, so the pair cannot drift.
+The fifth was the HTTP status check, which turned out to be load-bearing rather
+than belt-and-braces: a 4xx whose body happens to parse would produce a confident
+publish time from a failed request, and name the wrong process to restart.
+
+82 checks in `tests/test_publisher_vs_bot.py`, including the incident replayed
+from its real timestamps. All 35 applied mutations caught.
+
+---
+
 ## Operator notes
 
 **Restarting BEASTT after an update.** The background service holds the old code, so
@@ -898,6 +973,11 @@ output, not input.
     say so.** Entry 9 was one confusing evening caused entirely by a mismatch the
     code knew about and never mentioned. Advice in an operator note is not a
     feature; the failure happens in front of someone who is not reading the notes.
+14. **An inference that involves arithmetic can still be worthless.** Entry 10's
+    twelve-second gap looked like a deduction and was a tautology: the last push
+    is always a successful one. Before trusting a signal, ask what the *other*
+    explanation would have looked like — if it looks identical, the signal is not
+    evidence. Both diagnoses this log records as wrong were confident.
 
 ## Scope
 

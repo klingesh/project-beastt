@@ -38,6 +38,8 @@ TIMEOUT = 20
 CACHE_TTL = 60
 
 _cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+#: (when we asked, when the file was last pushed as epoch seconds or None).
+_publish_cache: Dict[str, Tuple[float, Optional[float]]] = {}
 
 
 class MonitorError(RuntimeError):
@@ -119,15 +121,137 @@ def fetch_status(config: Config, use_cache: bool = True) -> Dict[str, Any]:
     return status
 
 
+def fetch_publish_age(config: Config, use_cache: bool = True) -> Optional[float]:
+    """Seconds since the status file was last pushed. None if it can't be known.
+
+    A second request, deliberately. The contents API says what the file holds and
+    not when it arrived, and *when it arrived* is the entire discriminator between
+    a stopped bot and a stopped publisher -- see `stale_verdict`.
+
+    **Never raises.** This is an enrichment: without it the report falls back to
+    the wording it had before, which was vague but true. The monitor is what
+    someone reaches for when something is already broken, so it must not acquire a
+    new way to fail -- a second network call that could take the whole report down
+    with it would be a poor trade for one sharper sentence.
+
+    The commit time is cached, not the age. Caching an age would hand back a
+    number that was right a minute ago, which is precisely the class of bug this
+    function exists to detect.
+    """
+    repo = str(getattr(config, "bot_status_repo", "") or "").strip()
+    path = str(getattr(config, "bot_status_file", "status.json") or "status.json")
+    if not repo:
+        return None
+
+    key = f"{repo}/{path}"
+    hit = _publish_cache.get(key)
+    if use_cache and hit and (time.time() - hit[0]) < CACHE_TTL:
+        return None if hit[1] is None else max(0.0, time.time() - hit[1])
+
+    published: Optional[float] = None
+    token = token_for(config)
+    if token:
+        headers = dict(_UA)
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Accept"] = "application/vnd.github+json"
+        headers["X-GitHub-Api-Version"] = "2022-11-28"
+        try:
+            resp = requests.get(
+                f"{API}/repos/{repo}/commits",
+                params={"path": path, "per_page": 1},
+                headers=headers, timeout=TIMEOUT)
+            if resp.status_code < 400:
+                commits = resp.json()
+                stamp = (commits[0]["commit"]["committer"]["date"]
+                         if commits else "")
+                when = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+                published = when.timestamp()
+        except Exception:
+            # Including a shape that isn't what the API documents. Any failure at
+            # all means "not known", which the caller already handles.
+            published = None
+
+    _publish_cache[key] = (time.time(), published)
+    return None if published is None else max(0.0, time.time() - published)
+
+
 # --- interpreting -----------------------------------------------------------
 @dataclass
 class Health:
     """What the numbers mean, worked out once so the wording stays consistent."""
 
-    state: str                 # halted | paused | stale | running | unknown
+    state: str    # halted | paused | stale | bot_stopped | not_publishing |
+                  # running | unknown
     headline: str
     heartbeat_age: Optional[float]   # seconds, None if unparseable
     concerns: List[str]
+    #: Seconds since the status file was last pushed, when that could be found
+    #: out. Carried on the Health so the reports can read it without every one of
+    #: them growing a parameter.
+    publish_age: Optional[float] = None
+
+
+#: States meaning "the numbers below are not current". Grouped because three
+#: separate reports have to suppress the same things for all of them, and the
+#: first version of this knew only about "stale" -- so adding a state silently
+#: turned the suppression off.
+SILENT = ("stale", "bot_stopped", "not_publishing")
+
+
+def stale_verdict(heartbeat_age: float, publish_age: Optional[float],
+                  stale_after: float) -> Tuple[str, str, List[str]]:
+    """Which side went quiet: the bot, or the publisher pushing for it.
+
+    Reached when the heartbeat has gone silent. The heartbeat alone cannot tell
+    those apart, and this report used to say exactly that -- "either the bot has
+    stopped, or the publisher on the VPS has" -- leaving somebody to go and look.
+
+    The discriminator is the age of the last *push* against the age of the
+    heartbeat inside it:
+
+    * The publisher pushed long after the bot went quiet: **the bot stopped**, and
+      the VPS and its network are demonstrably fine, because a dead publisher
+      cannot push.
+    * Both went quiet together: **the publishing side stopped**. The bot may well
+      still be running and trading, which is what actually happened the day this
+      was written -- the trader logged normal cycles for fourteen hours after the
+      last push, while the report said "not reporting".
+
+    What it will not claim is that the bot is *fine* in the second case. From a
+    laptop, "the publisher crashed", "the VPS rebooted" and "the network went" are
+    one indistinguishable event. Naming one would be the same guess this replaces,
+    pointed the other way -- and that guess is what sent somebody hunting through
+    Event Viewer for a shutdown that had never happened.
+    """
+    if publish_age is None:
+        return ("stale",
+                f"NOT REPORTING — last heartbeat {_ago(heartbeat_age)}",
+                ["Either the bot has stopped, or the publisher on the VPS has.",
+                 "Worth checking both windows are still running."])
+
+    # How old the heartbeat already was when the last push went out. A few
+    # minutes is normal and means nothing: the bot writes every 60s and the
+    # publisher pushes every 300s, so the newest published heartbeat is routinely
+    # several minutes behind. Only a lag past the staleness threshold says the
+    # publisher was still working while the bot was not.
+    lag = heartbeat_age - publish_age
+    if lag > stale_after:
+        return ("bot_stopped",
+                f"BOT STOPPED — last heartbeat {_ago(heartbeat_age)}, but the "
+                f"VPS published {_ago(publish_age)}",
+                ["The publisher is still pushing, so the VPS is up and its "
+                 "network is fine — it is the bot itself that has stopped.",
+                 "Restart the bot on the VPS. The publisher doesn't need "
+                 "touching."])
+
+    return ("not_publishing",
+            f"NOT REPORTING — nothing published for {_ago(publish_age)}",
+            ["The publisher on the VPS stopped, so every number below is that "
+             "old. The bot may still be running and trading normally.",
+             "Check the bot's own log before restarting it — if it is alive, only "
+             "the publisher needs starting."])
 
 
 def heartbeat_age(status: Dict[str, Any]) -> Optional[float]:
@@ -144,8 +268,15 @@ def heartbeat_age(status: Dict[str, Any]) -> Optional[float]:
     return max(0.0, (datetime.now(timezone.utc) - when).total_seconds())
 
 
-def assess(config: Config, status: Dict[str, Any]) -> Health:
-    """Decide how worried to be, in a fixed order of severity."""
+def assess(config: Config, status: Dict[str, Any],
+           publish_age: Optional[float] = None) -> Health:
+    """Decide how worried to be, in a fixed order of severity.
+
+    `publish_age` is optional and the report degrades to its older, vaguer wording
+    without it -- see `stale_verdict`. Passed in rather than fetched here so this
+    stays a pure function of its arguments, which is the only reason an hour of
+    monitor behaviour can be tested in milliseconds.
+    """
     stale_after = float(getattr(config, "bot_stale_minutes", 15) or 15) * 60
     age = heartbeat_age(status)
     concerns: List[str] = []
@@ -154,21 +285,17 @@ def assess(config: Config, status: Dict[str, Any]) -> Health:
         reason = str(status.get("halt_reason") or "reason not recorded")
         return Health("halted", f"HALTED — kill switch fired ({reason})", age,
                       ["The bot will take no new entries until this is cleared "
-                       "by hand on the VPS."])
+                       "by hand on the VPS."], publish_age)
 
     if age is None:
         concerns.append("its heartbeat timestamp couldn't be read")
     elif age > stale_after:
-        return Health(
-            "stale",
-            f"NOT REPORTING — last heartbeat {_ago(age)}",
-            age,
-            ["Either the bot has stopped, or the publisher on the VPS has.",
-             "Worth checking both windows are still running."])
+        state, headline, notes = stale_verdict(age, publish_age, stale_after)
+        return Health(state, headline, age, notes, publish_age)
 
     if status.get("day_halted") or status.get("new_entries_blocked"):
         return Health("paused", "PAUSED — daily loss limit hit, no new entries "
-                                "today", age, concerns)
+                                "today", age, concerns, publish_age)
 
     # Things worth mentioning without changing the headline.
     dd = _number(status.get("drawdown_percent"))
@@ -183,7 +310,7 @@ def assess(config: Config, status: Dict[str, Any]) -> Health:
     if looping:
         concerns.append(looping)
 
-    return Health("running", "RUNNING", age, concerns)
+    return Health("running", "RUNNING", age, concerns, publish_age)
 
 
 #: Restarts within an hour that suggest the bot cannot stay up.
@@ -235,14 +362,15 @@ def _money(value: Any, currency: str = "") -> str:
 
 
 # --- reporting --------------------------------------------------------------
-def summarise(config: Config, status: Dict[str, Any]) -> str:
+def summarise(config: Config, status: Dict[str, Any],
+              publish_age: Optional[float] = None) -> str:
     """The answer to "how's my bot?"."""
-    health = assess(config, status)
+    health = assess(config, status, publish_age)
     currency = str(status.get("currency") or "")
     mode = "dry run (no orders placed)" if status.get("dry_run") else "live orders"
 
     lines = [f"Bot: {health.headline}"]
-    if health.state != "stale":
+    if health.state not in SILENT:
         lines[0] += f"   (heartbeat {_ago(health.heartbeat_age)})"
 
     lines.append(f"Account {status.get('login', '?')} — {mode}")
@@ -293,23 +421,55 @@ def summarise(config: Config, status: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def one_line(config: Config, status: Dict[str, Any]) -> str:
+def one_line(config: Config, status: Dict[str, Any],
+             publish_age: Optional[float] = None) -> str:
     """A single line, for the status screen."""
-    health = assess(config, status)
+    health = assess(config, status, publish_age)
     return (f"{health.headline}; equity "
             f"{_money(status.get('equity'), str(status.get('currency') or ''))}, "
             f"drawdown {_number(status.get('drawdown_percent')):.2f}%")
 
 
-def alerts(config: Config, status: Dict[str, Any]) -> List[str]:
+def publish_age_if_needed(config: Config, status: Dict[str, Any]) -> Optional[float]:
+    """The publish age, but only when it could change the verdict.
+
+    A bot that is reporting normally has nothing to explain, and this is a network
+    round trip on the path of every "how's my bot?". So the extra request is spent
+    only once the heartbeat has actually gone quiet -- which is rare, and is
+    exactly when somebody is standing there wanting to know which window to go and
+    look at.
+
+    Lives here, and not in each of the three callers, because the threshold it
+    compares against belongs to `assess` and having three copies of it is how they
+    drift apart.
+    """
+    stale_after = float(getattr(config, "bot_stale_minutes", 15) or 15) * 60
+    age = heartbeat_age(status)
+    if age is None or age <= stale_after:
+        return None
+    return fetch_publish_age(config)
+
+
+def alerts(config: Config, status: Dict[str, Any],
+           publish_age: Optional[float] = None) -> List[str]:
     """Things worth interrupting someone for. Empty when all is well.
 
     Kept separate from summarise() because the threshold is different: a report
     can mention anything, an interruption has to earn it.
     """
-    health = assess(config, status)
+    health = assess(config, status, publish_age)
     if health.state == "halted":
         return [f"Trading bot HALTED: {status.get('halt_reason') or 'kill switch'}"]
+    if health.state == "bot_stopped":
+        # Named as the bot, because that is now known rather than suspected, and
+        # because the two cases send you to different windows on the VPS.
+        return [f"Trading bot STOPPED — last heartbeat "
+                f"{_ago(health.heartbeat_age)}. The VPS is still publishing, so "
+                f"it is the bot that has stopped."]
+    if health.state == "not_publishing":
+        return [f"Trading bot status not published for "
+                f"{_ago(health.publish_age)} — the publisher on the VPS has "
+                f"stopped. The bot itself may still be trading."]
     if health.state == "stale":
         return [f"Trading bot not reporting — last heartbeat "
                 f"{_ago(health.heartbeat_age)}"]

@@ -42,6 +42,38 @@ def halted(status, reason="max drawdown reached"):
     return status
 
 
+def states_in_source() -> set:
+    """Every health state the code can actually report, read out of the source.
+
+    Parsed rather than listed, so that adding a state to `assess` forces a
+    decision about whether the watcher should alert on it. Two sources: the first
+    argument of every `Health(...)` construction in either module -- `botwatch`
+    builds one itself when the status cannot be read -- and the first element of
+    every tuple `stale_verdict` returns.
+    """
+    import ast
+    from pathlib import Path
+
+    found = set()
+    for module in (trading, botwatch):
+        tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and getattr(node.func, "id", "") == "Health"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)):
+                found.add(node.args[0].value)
+            if (isinstance(node, ast.FunctionDef)
+                    and node.name == "stale_verdict"):
+                for inner in ast.walk(node):
+                    if (isinstance(inner, ast.Return)
+                            and isinstance(inner.value, ast.Tuple)
+                            and inner.value.elts
+                            and isinstance(inner.value.elts[0], ast.Constant)):
+                        found.add(inner.value.elts[0].value)
+    return found
+
+
 # --- the signature ----------------------------------------------------------
 class TestSignature:
     """What counts as "news", collapsed to a comparable string."""
@@ -266,7 +298,30 @@ class TestRecovery:
         assert messages == []
 
     def test_BAD_states_are_the_ones_worth_interrupting_for(self):
-        assert botwatch.BAD == ("halted", "stale", "paused")
+        assert botwatch.BAD == ("halted", "stale", "bot_stopped",
+                                "not_publishing", "paused")
+
+    def test_every_state_the_code_can_produce_is_accounted_for(self):
+        """The invariant the literal above does not protect.
+
+        A state missing from BAD is silence, and breaking silence is the entire
+        job of this watcher. `bot_stopped` and `not_publishing` arrived as the two
+        halves of `stale`; had they not been added to BAD, the watcher would have
+        gone quiet about a dead bot with every other test still green. That is the
+        worst shape of bug this project has -- see the log's lesson 11.
+
+        So the states are read out of the code that produces them rather than
+        listed here: every string handed to `Health(...)` anywhere, plus every
+        state `stale_verdict` returns. A new one has to be classified, not merely
+        mentioned.
+        """
+        produced = states_in_source()
+
+        assert {"halted", "stale", "bot_stopped", "not_publishing"} <= produced
+        for state in produced - {"running", "unknown"}:
+            assert state in botwatch.BAD, (
+                f"the code can report {state!r} and the watcher would say "
+                "nothing about it")
 
 
 # --- lesser concerns, reported once ---------------------------------------
