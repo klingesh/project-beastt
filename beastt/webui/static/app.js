@@ -111,6 +111,31 @@
     el.banner.classList.remove("hidden");
   };
 
+  /* This page is always current -- the server re-reads its Javascript, HTML and
+     CSS from disk on every request. Its Python is not: that was loaded when the
+     process started. So an update reaches the front end at once and the back end
+     never, and the mismatch surfaces as errors describing code that is no longer
+     on disk anywhere. One real example: a screenshot pasted with brand-new code
+     and refused by the old uploader, which had never heard of images.
+
+     Said once per page. Someone who dismissed it has been told. */
+  let staleNoticed = false;
+  const noteStaleCode = (code) => {
+    if (!code || !code.stale || staleNoticed) return;
+    staleNoticed = true;
+    showBanner(code.detail, code.fix);
+  };
+
+  /* Asked on a timer, not only at load: the way anyone finds out about an update
+     is by running update.py, and this window is usually already open when they
+     do. Slow on purpose -- the server answers this from cached stats until a
+     file actually moves, and nothing here is urgent to the second. */
+  const watchForUpdates = () => setInterval(async () => {
+    try {
+      noteStaleCode((await api("/api/status")).code);
+    } catch (_) { /* mid-restart, most likely -- which is the fix */ }
+  }, 20000);
+
   /* Our own confirmation dialog rather than window.confirm, which can't be
      styled and, in some browsers, offers to suppress itself permanently --
      a bad outcome for an irreversible delete. Resolves true/false. */
@@ -964,7 +989,13 @@
       el.modelInfo.classList.toggle("warn", brain.ready === false);
       el.brainDot.classList.toggle("offline", brain.ready === false);
       if (brain.ready === false) showBanner(brain.detail, brain.fix);
+
+      // Last, so it outranks the model warning: a server running code that is
+      // no longer on disk explains symptoms nothing else will.
+      noteStaleCode(status.code);
     } catch (_) { /* defaults are fine */ }
+    // Outside the try: a first status that failed is no reason to stop asking.
+    watchForUpdates();
     await refreshList();
     el.input.focus();
   })();

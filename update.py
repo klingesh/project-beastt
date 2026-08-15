@@ -42,8 +42,8 @@ SKIP_PREFIX = ("beastt_memory/", "beastt_output/", "beastt_workspace/",
 ROOT = Path(__file__).resolve().parent
 
 
-def _token() -> str:
-    """The GitHub token from .env, or the environment, or "".
+def _setting(key: str) -> str:
+    """A BEASTT_* setting from .env, or the environment, or "".
 
     Read straight out of the file rather than through beastt.config, because this
     script has to work before the code it is updating is in place -- including
@@ -57,17 +57,106 @@ def _token() -> str:
                 line = line.strip()
                 if line.startswith("#") or "=" not in line:
                     continue
-                key, _, value = line.partition("=")
-                if key.strip() == "BEASTT_GITHUB_TOKEN":
+                name, _, value = line.partition("=")
+                if name.strip() == key:
                     found = value.split("#")[0].strip().strip("\"'")
                     if found:
                         return found
         except Exception:
             pass
-    return os.environ.get("BEASTT_GITHUB_TOKEN", "").strip()
+    return os.environ.get(key, "").strip()
+
+
+def _token() -> str:
+    return _setting("BEASTT_GITHUB_TOKEN")
 
 
 TOKEN = _token()
+
+#: Must match Config.ui_port's default. Duplicated rather than imported, for the
+#: same reason the token is read by hand.
+DEFAULT_UI_PORT = 8765
+
+
+def ui_port() -> int:
+    try:
+        return int(_setting("BEASTT_UI_PORT"))
+    except ValueError:
+        return DEFAULT_UI_PORT
+
+
+def _ui_answering(port: int, timeout: float = 0.4) -> bool:
+    """Is the chat interface accepting connections right now?
+
+    A socket connect, like beastt.uilaunch's own check: a PID file can outlive
+    its process, and a listed process says nothing about whether its socket is up.
+    """
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
+def _windowless_beastt() -> bool:
+    """Is a console-free Python running -- the wake-word service, or a UI it started?
+
+    Named by image rather than by inspecting command lines: the wake service and
+    the interface it launches both run under pythonw.exe precisely so that no
+    console appears, and one restart covers both.
+    """
+    # sys.platform rather than os.name, because a test that patched os.name
+    # would change which class pathlib.Path builds and break unrelated code.
+    if sys.platform != "win32":
+        return False
+    try:
+        import subprocess
+
+        result = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq pythonw.exe", "/NH"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except Exception:
+        return False
+    return "pythonw.exe" in (result.stdout or "").lower()
+
+
+def running_parts(port: int) -> list:
+    """Which parts of BEASTT are up right now, still holding the replaced code."""
+    parts = []
+    if _ui_answering(port):
+        parts.append(f"the chat interface, on http://127.0.0.1:{port}")
+    if _windowless_beastt():
+        parts.append("a background BEASTT (the wake-word listener)")
+    return parts
+
+
+def restart_notice(parts: list) -> list:
+    """What to print after an update, given what was found running.
+
+    Because the files being replaced are not the files in memory. The interface
+    re-reads its Javascript from disk on every request but its Python only at
+    startup, so updating underneath it produces a new front end driving an old
+    back end -- and errors that describe code which no longer exists on disk.
+    That cost an evening once: a pasted screenshot named by brand-new code and
+    then refused by the old uploader, which had never heard of images.
+    """
+    if not parts:
+        return []
+
+    lines = ["", "This update is on disk but not in memory. Still running:"]
+    lines += [f"  - {part}" for part in parts]
+    lines.append("")
+    lines.append("Restart to load it:")
+    if sys.platform == "win32":
+        lines.append("  taskkill /F /IM pythonw.exe        # stops the background one")
+        lines.append("  ...then start BEASTT from your Startup shortcut")
+        lines.append("  (started it yourself in a terminal? Ctrl+C there instead)")
+    else:
+        lines.append("  stop BEASTT and start it again")
+    return lines
 
 
 def _headers(accept: str = "*/*") -> dict:
@@ -221,6 +310,10 @@ def main(argv=None) -> int:
     if failed:
         print("Some files failed -- re-run `python update.py` to retry.")
         return 1
+
+    if (added or updated) and not args.dry_run:
+        for line in restart_notice(running_parts(ui_port())):
+            print(line)
 
     print("\nNext steps:")
     print("  python main.py --status        # check everything is healthy")
