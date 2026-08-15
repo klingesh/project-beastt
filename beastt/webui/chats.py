@@ -109,13 +109,33 @@ def uploads_dir(chat_id: str) -> Path:
     return path
 
 
-def add_attachment(chat: Dict, name: str, note: str, text: str) -> Dict:
-    """Store an attachment's extracted text and record it on the chat."""
-    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:80] or "file"
+def add_attachment(chat: Dict, name: str, note: str, text: str,
+                   blob: Optional[bytes] = None, kind: str = "document") -> Dict:
+    """Store an attachment's extracted text and record it on the chat.
+
+    `blob` keeps the original bytes as well, which images need: the text side of
+    an image is whatever OCR could read, and the picture itself still has to be
+    shown back to the user. Documents pass None and are unaffected.
+    """
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:80]
+    # A name of nothing but dots survives the substitution and then names a
+    # directory: "." is the uploads folder and ".." is its parent, so writing to
+    # either raised IsADirectoryError out of the upload handler. Not a way out of
+    # the folder -- it fails rather than escaping -- but an unhandled crash on a
+    # one-character filename.
+    if not safe_name or not safe_name.strip("."):
+        safe_name = "file"
     target = uploads_dir(chat["id"]) / f"{safe_name}.txt"
     target.write_text(text, encoding="utf-8")
 
-    entry = {"name": name, "note": note, "chars": len(text), "stored": target.name}
+    entry = {"name": name, "note": note, "chars": len(text), "stored": target.name,
+             "kind": kind}
+    if blob is not None:
+        # Kept beside the text under the same sanitised stem, so serving it needs
+        # no second lookup and no trust in the name that arrived.
+        binary = uploads_dir(chat["id"]) / safe_name
+        binary.write_bytes(bytes(blob))
+        entry["file"] = binary.name
     attachments = chat.setdefault("attachments", [])
     # Replace an earlier upload of the same file rather than duplicating it.
     attachments[:] = [a for a in attachments if a.get("name") != name]

@@ -361,6 +361,16 @@ img.art {
 .attach-chip.pending { color: var(--muted); font-style: italic; }
 .ac-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ac-note { color: var(--muted); font-size: 11px; }
+
+/* Images get a thumbnail: a filename is a poor way to confirm you pasted the
+   right screenshot. The chip stays the same width, so a row of them lines up. */
+.attach-chip.is-image { padding: 5px 9px 5px 5px; align-items: stretch; }
+.ac-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; justify-content: center; }
+.ac-thumb {
+  width: 42px; height: 42px; flex: 0 0 42px;
+  object-fit: cover; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--bg);
+}
 .ac-x {
   background: transparent; border: none; color: var(--muted);
   cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px;
