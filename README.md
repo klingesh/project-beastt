@@ -632,6 +632,34 @@ something concrete to answer with. Updates keep a backup of every replaced file
 (`beastt_memory/backups/`) and never touch `.env`, memory, or generated files --
 and take effect on restart.
 
+## 🖼️ Attaching images
+
+Images can be attached like any other file — click 📎, drag them in, or just
+**paste** with Ctrl+V, which is what you usually want for a screenshot. They show
+as a thumbnail so you can see you picked the right one.
+
+What happens next is deliberately bounded, because a local model **cannot see
+images**:
+
+- the file is identified (format, dimensions, size)
+- any text in it is read, if OCR is installed
+- and the model is told plainly that it has not seen the picture
+
+That last point is the whole design. Asked about an image it cannot see, an
+assistant will otherwise answer from the *filename* — a file called
+`sales-chart-q3.png` invites a confident paragraph about Q3 sales. So describing
+the appearance is ruled out, and with no text available it says so and asks you
+what is in it.
+
+To read text out of screenshots, install OCR:
+
+```bash
+pip install pillow pytesseract
+```
+
+`pytesseract` also needs the [Tesseract program](https://github.com/UB-Mannheim/tesseract/wiki)
+itself. Without it, images are still stored, shown and identified — just not read.
+
 ## 📖 Reading documents
 
 ```
@@ -781,7 +809,7 @@ pip install pytest
 pytest
 ```
 
-1641 checks, about five seconds. They need **no** model, no network, no API keys
+1676 checks, about five seconds. They need **no** model, no network, no API keys
 and no optional packages — every function they cover is pure, and
 `tests/conftest.py` stubs `requests` if it isn't installed (the stub raises if
 anything tries to make a real request).

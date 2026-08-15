@@ -201,7 +201,8 @@ class TestConfiguration:
 
         assert _parse_args(["--on-wake", mode]).on_wake == mode
 
-    def test_the_port_comes_from_the_setting_not_a_hardcoded_default(self):
+    def test_the_port_comes_from_the_setting_not_a_hardcoded_default(self,
+                                                                     make_config):
         """`--port` used to default to 8765, which silently beat BEASTT_UI_PORT
         for every user who set it."""
         from dataclasses import replace
@@ -210,7 +211,7 @@ class TestConfiguration:
         from beastt.config import Config
 
         assert _parse_args(["--ui"]).port is None
-        assert replace(Config(), ui_port=9100).ui_port == 9100
+        assert make_config(ui_port=9100).ui_port == 9100
 
     def test_an_explicit_port_still_wins(self):
         from beastt.cli import _build_config, _parse_args
@@ -218,10 +219,10 @@ class TestConfiguration:
         config = _build_config(_parse_args(["--ui", "--port", "9200"]))
         assert config.ui_port == 9200
 
-    def test_the_default_port_matches_the_launcher(self):
-        from beastt.config import Config
-
-        assert Config().ui_port == uilaunch.DEFAULT_PORT
+    def test_the_default_port_matches_the_launcher(self, pristine_config):
+        """Passed on every machine that had not set BEASTT_UI_PORT, which is luck
+        rather than a test."""
+        assert pristine_config().ui_port == uilaunch.DEFAULT_PORT
 
 
 class TestTheAutostartLauncherKeepsTheMode:
@@ -296,7 +297,8 @@ class TestTheToastNeverBreaksTheWake:
         cli._toast_wake(Config(), "Hey Lingaa")      # must not raise
 
     def test_the_greeting_is_scrubbed_before_it_reaches_powershell(self,
-                                                                   monkeypatch):
+                                                                   monkeypatch,
+                                                                   make_config):
         """notify.toast builds a command by string interpolation, and this text
         carries the user's name -- which they chose, and could contain a quote.
 
@@ -315,7 +317,7 @@ class TestTheToastNeverBreaksTheWake:
                             lambda title, message: received.update(
                                 title=title, message=message))
 
-        cli._toast_wake(replace(Config(), name="Jarvis"),
+        cli._toast_wake(make_config(name="Jarvis"),
                         "Hey O'Brien, I'm \"listening\"")
 
         assert "'" not in received["message"]
