@@ -190,9 +190,11 @@ def report() -> None:
             from . import trading
 
             snapshot = trading.fetch_status(config)
-            health = trading.assess(config, snapshot)
+            published = trading.publish_age_if_needed(config, snapshot)
+            health = trading.assess(config, snapshot, published)
             ok = health.state == "running"
-            print(f"[{_ok(ok)}] Trading bot: {trading.one_line(config, snapshot)}")
+            print(f"[{_ok(ok)}] Trading bot: "
+                  f"{trading.one_line(config, snapshot, published)}")
             for note in health.concerns:
                 print(f"       {note}")
         except Exception as exc:

@@ -90,7 +90,8 @@ class TradingBotSkill(Skill):
                 or directive(_ASK_TRADES, body) is not None)
 
     def run(self, text: str) -> str:
-        from ..trading import MonitorError, fetch_status, summarise
+        from ..trading import (MonitorError, fetch_status,
+                               publish_age_if_needed, summarise)
 
         if directive(_ACT, text or "") is not None:
             # Say what it will not do, and why, rather than letting the model
@@ -109,4 +110,5 @@ class TradingBotSkill(Skill):
         except MonitorError as exc:
             return f"I couldn't read the bot's status: {exc}"
 
-        return summarise(self.config, status)
+        return summarise(self.config, status,
+                         publish_age_if_needed(self.config, status))
