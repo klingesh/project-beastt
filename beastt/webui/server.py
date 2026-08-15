@@ -251,6 +251,48 @@ class Handler(BaseHTTPRequestHandler):
         kind = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
         self._send(200, target.read_bytes(), kind)
 
+    def _attachment(self, rest: str):
+        """Serve an uploaded image back, so the chat can show a thumbnail.
+
+        Guarded the same way as _art, and for the same reason: the path arrives
+        from a request. Both segments are stripped to a safe alphabet -- which
+        removes separators outright, so no arrangement of dots and slashes can
+        climb out -- and the resolved path is then checked against the folder
+        anyway, because one guard on a file server is not enough.
+
+        Only files recorded as an attachment on that chat are served. The folder
+        also holds the extracted text of every document ever uploaded, and this
+        route has no business handing those out by guessing at names.
+        """
+        parts = [p for p in unquote(rest or "").split("/") if p]
+        if len(parts) != 2:
+            return self._json({"error": "bad attachment path"}, 400)
+
+        chat_id = re.sub(r"[^A-Za-z0-9_-]", "", parts[0])[:40]
+        safe = re.sub(r"[^A-Za-z0-9._-]", "", parts[1])
+        if not chat_id or not safe or safe.startswith("."):
+            return self._json({"error": "bad attachment path"}, 400)
+
+        chat = chats.load(chat_id)
+        if chat is None:
+            return self._json({"error": "no such chat"}, 404)
+        known = {a.get("file") for a in (chat.get("attachments") or [])
+                 if a.get("file")}
+        if safe not in known:
+            return self._json({"error": "no such attachment"}, 404)
+
+        folder = chats.uploads_dir(chat_id).resolve()
+        target = (folder / safe).resolve()
+        if folder not in target.parents or not target.is_file():
+            return self._json({"error": "no such attachment"}, 404)
+
+        kind = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        if not kind.startswith("image/"):
+            # This route exists to show pictures. Anything else being asked for
+            # here is either a mistake or an attempt.
+            return self._json({"error": "not an image"}, 400)
+        self._send(200, target.read_bytes(), kind)
+
     # --- routes -----------------------------------------------------------
     def do_GET(self):
         path = urlparse(self.path).path
@@ -261,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._static(path[len("/static/"):])
         if path.startswith("/api/art/"):
             return self._art(path[len("/api/art/"):])
+        if path.startswith("/api/attachment/"):
+            return self._attachment(path[len("/api/attachment/"):])
 
         if path == "/api/status":
             config = self.state.config
@@ -399,10 +443,14 @@ class Handler(BaseHTTPRequestHandler):
         if not name or not encoded:
             return self._json({"error": "nothing to upload"}, 400)
 
-        if not supported(name):
+        from .. import imageread
+
+        picture = imageread.is_image(name)
+        if not picture and not supported(name):
             return self._json({
                 "error": f"I can't read '{Path(name).suffix or name}'. I handle PDF, "
-                         "Word, Excel, PowerPoint, CSV, JSON, text and source files."
+                         "Word, Excel, PowerPoint, CSV, JSON, text, source files "
+                         "and images (PNG, JPEG, GIF, WEBP, BMP)."
             }, 400)
 
         try:
@@ -418,14 +466,27 @@ class Handler(BaseHTTPRequestHandler):
         if chat is None:
             chat = chats.create()
 
-        try:
-            text, note, truncated = extract(name, data)
-        except Unsupported as exc:
-            return self._json({"error": str(exc)}, 400)
-        except Exception as exc:
-            return self._json({"error": f"couldn't read it ({exc.__class__.__name__})"}, 400)
+        if picture:
+            # Checked against the bytes, not the extension: a .png containing
+            # something else is not a picture, whatever it is called.
+            if not imageread.sniff(data):
+                return self._json({
+                    "error": f"{name} is named like an image but isn't one -- "
+                             "the file contents don't match any image format."
+                }, 400)
+            text, note, truncated = imageread.read(
+                name, data, self.state.config.user_name)
+            entry = chats.add_attachment(chat, name, note, text, blob=data,
+                                         kind="image")
+        else:
+            try:
+                text, note, truncated = extract(name, data)
+            except Unsupported as exc:
+                return self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                return self._json({"error": f"couldn't read it ({exc.__class__.__name__})"}, 400)
 
-        entry = chats.add_attachment(chat, name, note, text)
+            entry = chats.add_attachment(chat, name, note, text)
         # The assistant holds attachment context, so rebuild it next turn.
         self.state.forget(chat["id"])
         return self._json({

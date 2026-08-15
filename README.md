@@ -781,7 +781,7 @@ pip install pytest
 pytest
 ```
 
-1546 checks, about five seconds. They need **no** model, no network, no API keys
+1641 checks, about five seconds. They need **no** model, no network, no API keys
 and no optional packages — every function they cover is pure, and
 `tests/conftest.py` stubs `requests` if it isn't installed (the stub raises if
 anything tries to make a real request).
@@ -812,6 +812,7 @@ What they cover, and why these functions in particular:
 | `statements.fact_from` | "i live in chennai" is remembered as it is said, and survives a restart |
 | `personality.wake_greeting` / `uilaunch` | calling its name produces something you can notice |
 | `logview` | you can watch the service without becoming a second one |
+| `imageread` | an attached image is described honestly, never guessed at |
 
 Nineteen of those checks are marked `xfail(strict=True)`: known bugs, written out
 as the behaviour that *should* hold, with the cause in the reason string. The

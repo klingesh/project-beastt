@@ -229,10 +229,19 @@
     el.attachments.innerHTML = "";
     attachments.forEach((file) => {
       const chipEl = document.createElement("span");
-      chipEl.className = "attach-chip";
-      chipEl.innerHTML =
+      chipEl.className = "attach-chip" + (file.kind === "image" ? " is-image" : "");
+      // A thumbnail for a picture, because a filename is a poor way to confirm
+      // you pasted the right screenshot. The src is built here from the chat id
+      // and the server's own stored name, never from anything the file claimed
+      // to be called.
+      const thumb = file.kind === "image" && file.file && chatId
+        ? `<img class="ac-thumb" alt="" src="/api/attachment/${encodeURIComponent(chatId)}/${encodeURIComponent(file.file)}">`
+        : "";
+      chipEl.innerHTML = thumb +
+        `<span class="ac-text">` +
         `<span class="ac-name">${escapeHtml(file.name)}</span>` +
         `<span class="ac-note">${escapeHtml(file.note || "")}</span>` +
+        `</span>` +
         `<button class="ac-x" title="Remove">&times;</button>`;
       chipEl.querySelector(".ac-x").onclick = async () => {
         if (!chatId) return;
@@ -253,22 +262,40 @@
     reader.readAsDataURL(file);
   });
 
-  const uploadFiles = async (files) => {
+  // A pasted screenshot arrives as a File with no useful name -- browsers call
+  // it "image.png" every time, so three of them would look identical in the
+  // list and each would replace the last on the server, which de-duplicates by
+  // name. Stamping the time makes them distinct and tells you which is which.
+  const namePasted = (file, index) => {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const ext = (file.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    const suffix = index ? `-${index + 1}` : "";
+    return `pasted-${stamp}${suffix}.${ext}`;
+  };
+
+  const uploadFiles = async (files, { rename = false } = {}) => {
+    files.forEach((file, i) => {
+      if (rename || !file.name || file.name === "image.png") {
+        // File.name is read-only, so carry the chosen name alongside it.
+        file._asName = namePasted(file, i);
+      }
+    });
     for (const file of files) {
+      const shownName = file._asName || file.name;
       const pending = document.createElement("span");
       pending.className = "attach-chip pending";
-      pending.textContent = `Reading ${file.name}…`;
+      pending.textContent = `Reading ${shownName}…`;
       el.attachments.appendChild(pending);
       try {
         const data = await api("/api/upload", {
           method: "POST",
           body: JSON.stringify({
-            chat_id: chatId, name: file.name, data: await readAsBase64(file),
+            chat_id: chatId, name: shownName, data: await readAsBase64(file),
           }),
         });
         pending.remove();
         if (data.error) {
-          addMessage("assistant", `I couldn't attach ${file.name}: ${data.error}`);
+          addMessage("assistant", `I couldn't attach ${shownName}: ${data.error}`);
           continue;
         }
         chatId = data.chat_id;
@@ -280,7 +307,7 @@
         refreshList();
       } catch (err) {
         pending.remove();
-        addMessage("assistant", `Something went wrong attaching ${file.name}.`);
+        addMessage("assistant", `Something went wrong attaching ${shownName}.`);
       }
     }
   };
@@ -874,6 +901,20 @@
       if (event === "dragleave" && e.relatedTarget) return;
       document.body.classList.remove("dropping");
     }));
+  // Paste. A screenshot on the clipboard is the commonest thing anyone wants to
+  // attach and was the one route that did not work -- the button and drag-and-drop
+  // both existed, but Ctrl+V into the box did nothing at all.
+  //
+  // Only intercept when there are actually files on the clipboard: pasting text
+  // must keep working normally, and clipboardData carries both, so checking the
+  // wrong one would swallow every ordinary paste.
+  document.addEventListener("paste", (e) => {
+    const items = e.clipboardData ? [...(e.clipboardData.files || [])] : [];
+    if (!items.length) return;
+    e.preventDefault();
+    uploadFiles(items, { rename: true });
+  });
+
   document.addEventListener("drop", (e) => {
     const files = [...(e.dataTransfer?.files || [])];
     if (files.length) uploadFiles(files);
