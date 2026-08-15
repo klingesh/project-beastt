@@ -201,7 +201,8 @@ class TestThePlannerGetsNoMemory:
 
     def test_deliberate_context_carries_attachments_but_not_facts(self,
                                                                  monkeypatch,
-                                                                 tmp_path):
+                                                                 tmp_path,
+                                                                 make_config):
         from dataclasses import replace
 
         from beastt import deliberate
@@ -217,8 +218,8 @@ class TestThePlannerGetsNoMemory:
 
         monkeypatch.setattr(deliberate, "work", fake_work)
 
-        config = replace(
-            Config(), user_name=USER, longterm_enabled=True,
+        config = make_config(
+            user_name=USER, longterm_enabled=True,
             memory_path=str(tmp_path / "memory.json"),
             documents_enabled=False, code_enabled=False, imagegen_enabled=False,
             search_enabled=False, bot_status_repo="", data_enabled=False,

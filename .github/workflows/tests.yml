@@ -64,6 +64,61 @@ jobs:
       - name: Run the suite
         run: pytest
 
+  configured:
+    # CI runs with an empty environment, so a test that reads a live Config()
+    # default passes here and fails on any machine that has set that value. That
+    # is not hypothetical: `assert Config().wake_console is False` was green on
+    # every job above and failed immediately for the user who had been told to
+    # switch the setting on.
+    #
+    # So one job runs the suite with settings actually configured. The values are
+    # deliberately non-default -- a job that sets everything to its default would
+    # prove nothing.
+    name: pytest with settings configured
+    runs-on: ubuntu-latest
+
+    env:
+      BEASTT_NAME: Jarvis
+      BEASTT_USER_NAME: Lingaa
+      BEASTT_MODEL: llama3.1:8b
+      BEASTT_ON_WAKE: ui
+      BEASTT_WAKE_CONSOLE: "on"
+      BEASTT_UI_PORT: "9100"
+      BEASTT_WAKE_MODEL: base
+      BEASTT_STT_MODEL: small
+      BEASTT_VOICE: "on"
+      BEASTT_SEARCH_READ_PAGES: "1"
+      BEASTT_VERIFY: "off"
+      BEASTT_QUOTES: "off"
+      BEASTT_DOC_THEME: plum
+      BEASTT_IMAGE_GEN: "on"
+      BEASTT_SHELL: "on"
+      BEASTT_MAX_HISTORY: "8"
+      BEASTT_MEMORY_RECALL: "3"
+      BEASTT_TIMEOUT: "60"
+      BEASTT_BOT_STALE_MINUTES: "30"
+      # A key-shaped value, not a real one: enough to make a provider look
+      # configured, which is what leaked into the fixtures the first time.
+      BEASTT_GROQ_KEY: ci-not-a-real-key
+      BEASTT_FRED_KEY: ci-not-a-real-key
+      BEASTT_GITHUB_TOKEN: ci-not-a-real-key
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run the suite
+        run: pytest
+
   syntax:
     name: byte-compile every module
     runs-on: ubuntu-latest

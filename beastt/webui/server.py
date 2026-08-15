@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .. import providers
+from .. import freshness, providers
 from ..assistant import Assistant
 from ..config import Config
 from . import chats
@@ -314,6 +314,10 @@ class Handler(BaseHTTPRequestHandler):
                 "model": config.model,
                 "default_model": providers.default_model_id(config),
                 "brain": self.state.brain_status(),
+                # Whether the Python behind this reply is the Python on disk.
+                # The page asks again every so often, because the usual way to
+                # find out is to run update.py with this window already open.
+                "code": freshness.report(config.name),
             })
 
         if path == "/api/chats":
@@ -658,6 +662,10 @@ def serve(config: Optional[Config] = None, port: int = 8765,
         return
 
     Handler.state = _State(config)
+
+    # The code as it is at this instant is what this process will run until it
+    # ends. Recorded here so the page can say so when the files move underneath.
+    freshness.remember()
 
     # Localhost only: this interface has no authentication by design.
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)

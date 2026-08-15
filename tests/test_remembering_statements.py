@@ -286,7 +286,7 @@ class ScriptedBrain:
 
 
 @pytest.fixture
-def build(tmp_path):
+def build(tmp_path, make_config):
     from beastt.config import Config
 
     store = str(tmp_path / "memory.json")
@@ -294,8 +294,8 @@ def build(tmp_path):
     def _build(brain):
         from beastt.assistant import Assistant
 
-        config = replace(
-            Config(), name=NAME, user_name=USER, longterm_enabled=True,
+        config = make_config(
+            name=NAME, user_name=USER, longterm_enabled=True,
             memory_path=store, documents_enabled=False, code_enabled=False,
             imagegen_enabled=False, bot_status_repo="", data_enabled=False,
             search_enabled=False, deliberate=False, quotes_enabled=False,
@@ -402,11 +402,12 @@ class TestTheReportedSession:
                    for e in events if e["type"] == "status")
         assert "Lingaa lives in chennai" in assistant.longterm.all_texts()
 
-    def test_nothing_is_stored_when_long_term_memory_is_off(self, tmp_path):
+    def test_nothing_is_stored_when_long_term_memory_is_off(self, tmp_path,
+                                                           make_config):
         from beastt.assistant import Assistant
         from beastt.config import Config
 
-        config = replace(Config(), name=NAME, user_name=USER,
+        config = make_config(name=NAME, user_name=USER,
                          longterm_enabled=False, documents_enabled=False,
                          code_enabled=False, imagegen_enabled=False,
                          bot_status_repo="", data_enabled=False,
@@ -423,12 +424,12 @@ class TestTheWebInterfaceReflects:
     """It called remember_session() exactly never, so every fact a browser
     conversation produced was lost."""
 
-    def _state(self, tmp_path):
-        from beastt.config import Config
+    @pytest.fixture
+    def state(self, tmp_path, make_config):
         from beastt.webui.server import _State
 
-        return _State(replace(Config(), longterm_enabled=True,
-                              memory_path=str(tmp_path / "m.json")))
+        return _State(make_config(longterm_enabled=True,
+                                  memory_path=str(tmp_path / "m.json")))
 
     class _Assistant:
         def __init__(self):
@@ -444,10 +445,9 @@ class TestTheWebInterfaceReflects:
         return {"id": "abc", "messages": [{"role": "assistant", "content": "x"}]
                 * assistant_turns}
 
-    def test_it_reflects_once_the_interval_is_reached(self, tmp_path):
+    def test_it_reflects_once_the_interval_is_reached(self, state):
         import time
 
-        state = self._state(tmp_path)
         assistant = self._Assistant()
 
         state.reflect_later(self._chat(state.REFLECT_EVERY), assistant)
@@ -456,11 +456,10 @@ class TestTheWebInterfaceReflects:
         assert assistant.reflected == 1
 
     @pytest.mark.parametrize("turns", [0, 1, 2, 3, 5, 7])
-    def test_it_does_not_reflect_on_every_turn(self, tmp_path, turns):
+    def test_it_does_not_reflect_on_every_turn(self, state, turns):
         """It costs a model call."""
         import time
 
-        state = self._state(tmp_path)
         assistant = self._Assistant()
 
         state.reflect_later(self._chat(turns), assistant)
@@ -468,9 +467,8 @@ class TestTheWebInterfaceReflects:
 
         assert assistant.reflected == 0
 
-    def test_two_reflections_never_overlap(self, tmp_path):
+    def test_two_reflections_never_overlap(self, state):
         """They would only fight over the same file."""
-        state = self._state(tmp_path)
         assistant = self._Assistant()
         assistant._reflecting = True
 
@@ -478,10 +476,9 @@ class TestTheWebInterfaceReflects:
 
         assert assistant.reflected == 0
 
-    def test_nothing_happens_without_long_term_memory(self, tmp_path):
+    def test_nothing_happens_without_long_term_memory(self, state):
         import time
 
-        state = self._state(tmp_path)
         assistant = self._Assistant()
         assistant.longterm = None
 
@@ -510,10 +507,9 @@ class TestTheWebInterfaceReflects:
             "the streaming handler no longer reflects, so a browser conversation "
             "writes no durable facts -- the original fault")
 
-    def test_a_failing_reflection_is_swallowed(self, tmp_path):
+    def test_a_failing_reflection_is_swallowed(self, state):
         import time
 
-        state = self._state(tmp_path)
 
         class _Broken(self._Assistant):
             def remember_session(self):

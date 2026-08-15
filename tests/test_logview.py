@@ -131,12 +131,12 @@ class TestRun:
         assert "This is a viewer" in out
         assert "does not stop the assistant" in out
 
-    def test_it_uses_the_configured_name(self, log, capsys):
+    def test_it_uses_the_configured_name(self, log, capsys, make_config):
         from dataclasses import replace
 
         from beastt.config import Config
 
-        logview.run(config=replace(Config(), name="Jarvis"), path=log, once=True)
+        logview.run(config=make_config(name="Jarvis"), path=log, once=True)
 
         assert "Jarvis" in capsys.readouterr().out
 
@@ -252,11 +252,14 @@ class TestTheCliWiring:
         assert "not console_opened" in source
         assert "console_opened = True" in source
 
-    def test_the_setting_is_off_by_default(self):
-        """Most people want the browser, not a log."""
-        from beastt.config import Config
+    def test_the_setting_is_off_by_default(self, pristine_config):
+        """Most people want the browser, not a log.
 
-        assert Config().wake_console is False
+        Uses `pristine_config` because a live `Config()` reads the developer's own
+        .env at import time -- this test was green here and failed immediately on
+        the machine of the person who had been told to switch the setting on.
+        """
+        assert pristine_config().wake_console is False
 
 
 class TestOneListenerAtATime:

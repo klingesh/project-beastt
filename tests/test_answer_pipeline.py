@@ -51,11 +51,11 @@ class ScriptedBrain:
 
 
 @pytest.fixture
-def build(tmp_path, monkeypatch):
+def build(tmp_path, monkeypatch, make_config):
     """An Assistant with search and quotes stubbed, and nothing else running."""
     def _build(brain, *, sources=None, quote=None, quote_problems=None):
-        config = replace(
-            Config(), name="Jarvis", user_name="Lingaa",
+        config = make_config(
+            name="Jarvis", user_name="Lingaa",
             longterm_enabled=False, documents_enabled=False, code_enabled=False,
             imagegen_enabled=False, bot_status_repo="", data_enabled=False,
             search_enabled=True, deliberate=False, search_max_results=3,

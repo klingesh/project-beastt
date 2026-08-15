@@ -772,10 +772,77 @@ caught.
 
 ---
 
+## 9. A new front end talking to an old back end
+
+**Symptom.** Minutes after an update that installed cleanly, pasting a screenshot
+into the chat:
+
+> I couldn't attach pasted-2026-08-15-10-50-20-09.png: I can't read '.png'. I
+> handle PDF, Word, Excel, PowerPoint, CSV, JSON, text and source files.
+
+Nothing in the repository could produce that sentence. The filename
+`pasted-...png` is invented by pasting code that only exists in the new version;
+the refusal is the wording of the *old* uploader, which had never heard of images.
+Both halves were current at the same moment.
+
+**Cause.** An asymmetry nobody had written down. The interface's Javascript, HTML
+and CSS are read from disk on **every request**, so the front end updates the
+instant the files change. Its Python was read into memory when the process
+started and stays there until the process ends. So `update.py`, run with the
+server already open — which is how everyone runs it — upgrades one half and not
+the other, and the result is error messages describing a version of the program
+that exists nowhere on disk. Unsearchable, and indistinguishable from an update
+that failed.
+
+The advice was already in these operator notes. It was in the notes and not in
+the program, which is the same as not existing.
+
+**Fix.** `beastt/freshness.py` hashes the package's `.py` files when the server
+starts and again whenever asked. `/api/status` carries the verdict, the page asks
+at load and every twenty seconds after, and a stale server says so in the banner
+with the command to fix it. `update.py` closes the other end: after writing
+files it looks for a listening interface and a windowless BEASTT, and names what
+is still holding the old code.
+
+Four decisions worth keeping:
+
+* **Not a reload.** Swapping modules under a live server means open sockets,
+  threads mid-reply and two copies of a class failing `isinstance`. The restart
+  takes two seconds and is honest.
+* **Contents, not timestamps.** A stat cache went in and came straight back out:
+  two writes close together share an `mtime` on some filesystems, so a same-size
+  edit inside one tick was invisible. The tests that caught it are in
+  `TestTimestampsAreNotTrusted`, and they caught it on the machine this is
+  developed on, not in theory.
+* **`.py` counts, static assets do not.** The half that already updates itself
+  must not raise a restart notice, or the notice becomes noise.
+* **Every `.py`, not only the imported ones.** Being exact would mean walking
+  `sys.modules`, which fails in the worse direction: lazily imported modules —
+  `imageread` among them — are absent at check time and would report as fine.
+  Over-reporting costs two seconds; under-reporting costs an evening.
+
+`sys.platform`, not `os.name`, for the two Windows branches. A test that patched
+`os.name` changed which class `pathlib.Path` instantiates and took pytest's own
+internals down with it.
+
+**Three mutations were not caught, and two were real test weaknesses.** Asserting
+`"noteStaleCode(status.code)" in app.js` passed against a mutant that commented
+the call out, and `"staleNoticed" in app.js` passed against one that renamed the
+declaration and left every use pointing at nothing. The third was the guard that
+stops `update.py` shelling out to `tasklist` on a machine that has none: the
+function swallows exceptions, so removing the guard still returned `False` — it
+just started a process to do it. The call itself is now what is asserted.
+
+68 checks in `tests/test_code_freshness.py`. All 26 applied mutations caught.
+
+---
+
 ## Operator notes
 
 **Restarting BEASTT after an update.** The background service holds the old code, so
-`update.py` alone changes nothing:
+`update.py` alone changes nothing. Since entry 9 the program says so itself — the
+updater names what is still running, and the chat shows a banner — but the
+sequence is unchanged:
 
 ```
 python update.py
@@ -827,6 +894,10 @@ output, not input.
     the broken code: one because the example in this log is caught by a second
     pattern, one because a later guard rejects the same input. Both looked like
     coverage and were not.
+13. **If two halves of a program update on different schedules, the program has to
+    say so.** Entry 9 was one confusing evening caused entirely by a mismatch the
+    code knew about and never mentioned. Advice in an operator note is not a
+    feature; the failure happens in front of someone who is not reading the notes.
 
 ## Scope
 

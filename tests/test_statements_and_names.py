@@ -338,7 +338,8 @@ class TestTheAssistantPassesItsNameThrough:
         assert "name" in signature.parameters
 
     def test_the_name_reaches_the_search_decision_too(self, tmp_path,
-                                                      monkeypatch):
+                                                      monkeypatch,
+                                                      make_config):
         """Pins the argument rather than a behaviour.
 
         For an assistant called Jarvis or Beastt this line is near-redundant --
@@ -373,7 +374,7 @@ class TestTheAssistantPassesItsNameThrough:
             def stream(self, _messages, **_kwargs):
                 yield "ok"
 
-        config = replace(Config(), name="Orion", user_name="Lingaa",
+        config = make_config(name="Orion", user_name="Lingaa",
                          search_enabled=True, longterm_enabled=False,
                          documents_enabled=False, code_enabled=False,
                          imagegen_enabled=False, bot_status_repo="",
@@ -398,7 +399,8 @@ class TestTheAssistantPassesItsNameThrough:
 
         assert seen.get("name") == "Orion"
 
-    def test_the_assistant_hands_its_name_to_the_researcher(self, tmp_path):
+    def test_the_assistant_hands_its_name_to_the_researcher(self, tmp_path,
+                                                            make_config):
         from dataclasses import replace
 
         from beastt.assistant import Assistant
@@ -426,7 +428,7 @@ class TestTheAssistantPassesItsNameThrough:
             def stream(self, _messages, **_kwargs):
                 yield "ok"
 
-        config = replace(Config(), name="Jarvis", user_name="Lingaa",
+        config = make_config(name="Jarvis", user_name="Lingaa",
                          search_enabled=True, longterm_enabled=False,
                          documents_enabled=False, code_enabled=False,
                          imagegen_enabled=False, bot_status_repo="",

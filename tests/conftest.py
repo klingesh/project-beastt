@@ -61,31 +61,22 @@ _stub_requests()
 
 # --- configuration ----------------------------------------------------------
 @pytest.fixture
-def config():
+def config(make_config):
     """A Config with a bot configured and everything else quiet.
 
-    `Config`'s field defaults are read from the environment **at import time**, so
-    a real .env leaks straight into every test and there is no way to undo it
-    afterwards -- monkeypatching the environment is too late, the class body has
-    already run. Every field the tests depend on therefore has to be named here.
+    Built from `make_config`, so it starts at the *declared* defaults rather than
+    from a live `Config()`. That distinction is the whole point: field defaults are
+    evaluated when the class body runs, so a real .env leaks into anything built
+    with `replace(Config(), ...)` for every field the author did not name.
 
-    The first version of this fixture named the fields it thought mattered and
-    missed the five provider API keys, so on a machine with a Groq key in .env
-    two tests asserting "a cloud provider with no key is unconfigured" failed
-    against a provider that was, correctly, configured. The keys are now blanked
-    from the provider registry itself rather than listed, so adding a sixth
-    provider cannot reintroduce it.
+    This fixture was the first casualty, twice: it missed the five provider API
+    keys, so on a machine with a Groq key two checks asserting "a cloud provider
+    with no key is unconfigured" failed against a provider that was correctly
+    configured -- and then it missed `default_model`. The lesson took a third and
+    fourth recurrence to land, in `wake_console` and then in `verify_figures`: the
+    mistake is not forgetting a particular setting, it is listing them at all.
     """
-    from dataclasses import replace
-
-    from beastt import providers
-    from beastt.config import Config
-
-    secrets = {p.key_field: "" for p in providers.PROVIDERS if p.key_field}
-
-    return replace(
-        Config(),
-        **secrets,
+    return make_config(
         name="JARVIS",
         user_name="Lingesh",
         # Pinned because a real .env sets these, and `default_model` in
@@ -138,6 +129,120 @@ def _no_env_leak(request):
     assert not leaked, (
         f"the config fixture is carrying real API keys for {leaked} out of the "
         "environment; pin them in conftest.config")
+
+
+@pytest.fixture(scope="session")
+def pristine_values():
+    """Every Config field at its declared default, ignoring the environment.
+
+    Captured once by reloading the module with the environment scrubbed, then
+    reloading it back before any test runs -- so no test ever sees the reloaded
+    class, only this dictionary of values.
+
+    This is the root fix for a bug that has now appeared four times. `Config`'s
+    defaults are evaluated when the class body runs, so every fixture built with
+    `replace(Config(), ...)` silently inherits whatever the developer's .env says
+    for any field the author did not think to name. Each time, the missing field
+    was different -- provider keys, then `default_model`, then `wake_console`,
+    then `verify_figures` and `quotes_enabled` -- because the mistake is not
+    forgetting a particular setting, it is listing them at all.
+    """
+    import importlib
+    import os
+
+    import beastt.config as config_module
+
+    try:
+        import dotenv
+    except ImportError:
+        dotenv = None
+
+    saved = {key: value for key, value in os.environ.items()
+             if key.startswith(("BEASTT_", "JARVIS_"))}
+    real_loader = getattr(dotenv, "load_dotenv", None) if dotenv else None
+
+    try:
+        for key in saved:
+            del os.environ[key]
+        if real_loader is not None:
+            dotenv.load_dotenv = lambda *_a, **_k: False
+        fresh = importlib.reload(config_module)
+        values = {field: getattr(fresh.Config(), field)
+                  for field in fresh.Config.__dataclass_fields__}
+    finally:
+        if real_loader is not None:
+            dotenv.load_dotenv = real_loader
+        os.environ.update(saved)
+        importlib.reload(config_module)
+
+    return values
+
+
+@pytest.fixture
+def make_config(pristine_values):
+    """Build a Config from the declared defaults plus explicit overrides.
+
+    Use this instead of `replace(Config(), ...)` anywhere a test's behaviour
+    depends on a setting it did not name. The instance is of the ordinary `Config`
+    class -- only the starting values are pristine.
+    """
+    from beastt.config import Config
+
+    def _make(**overrides):
+        unknown = set(overrides) - set(pristine_values)
+        assert not unknown, f"no such Config field(s): {sorted(unknown)}"
+        return Config(**{**pristine_values, **overrides})
+
+    return _make
+
+
+@pytest.fixture
+def pristine_config():
+    """The `Config` class as it would be with no .env and no environment set.
+
+    The only honest way to test a *default*. `Config`'s field defaults are
+    evaluated when the class body runs, so a live `Config()` reports whatever the
+    developer's own .env says -- and a test asserting `Config().wake_console is
+    False` passes for everyone who has not set it and fails for everyone who has.
+    Which is exactly what happened: it was green here and red on the machine of
+    the person who had been told to turn the setting on.
+
+    That is the third time this class of bug has appeared in this project, after
+    the provider keys leaking into the `config` fixture and the same fixture
+    missing `default_model`. So it is a shared fixture now, and
+    `test_meta.py` fails the build if anyone asserts on a bare default again.
+
+    The environment is saved and restored by hand rather than with monkeypatch,
+    because the module has to be reloaded *after* the variables come back and
+    fixture teardown ordering does not allow that.
+    """
+    import importlib
+    import os
+
+    import beastt.config as config_module
+
+    try:
+        import dotenv
+    except ImportError:
+        dotenv = None
+
+    saved = {key: value for key, value in os.environ.items()
+             if key.startswith(("BEASTT_", "JARVIS_"))}
+    real_loader = getattr(dotenv, "load_dotenv", None) if dotenv else None
+
+    try:
+        for key in saved:
+            del os.environ[key]
+        if real_loader is not None:
+            # config.py loads the project's .env at import, which would put every
+            # variable straight back before the defaults were evaluated.
+            dotenv.load_dotenv = lambda *_a, **_k: False
+        yield importlib.reload(config_module).Config
+    finally:
+        if real_loader is not None:
+            dotenv.load_dotenv = real_loader
+        os.environ.update(saved)
+        importlib.reload(config_module)
 
 
 @pytest.fixture
