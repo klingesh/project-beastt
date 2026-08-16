@@ -208,12 +208,183 @@ _INFER_RE = tuple((re.compile(p, re.IGNORECASE), k) for p, k in _INFER)
 
 
 def infer_key(fact_text: str) -> str:
-    """The key a stored fact would have been given, or "" if it accumulates."""
+    """The predicate a stored fact would have been keyed on, or "".
+
+    The predicate alone is not a fact's identity -- see `full_key`, which is what
+    the store compares.
+    """
     text = str(fact_text or "")
     for pattern, key in _INFER_RE:
         if pattern.search(text):
             return key
     return ""
+
+
+#: Words that stand between a subject and its predicate without being it.
+#: "Lingaa is studying MBA" and "Lingaa studies MBA" have to reach the same
+#: subject, or a rephrasing stops superseding.
+_NOT_A_SUBJECT = frozenset({
+    "is", "am", "are", "was", "were", "be", "been", "being",
+    "has", "have", "had", "does", "do", "did",
+    "now", "currently", "also", "still", "just", "already", "always",
+    "probably", "presumably", "apparently", "the", "a", "an",
+    # Modifiers of "name", which would otherwise be read as the subject: "her
+    # full name is ..." keyed itself on "full", and Lingaa's own full name would
+    # then have collided with it and erased it.
+    "full", "first", "last", "real", "middle", "nick", "pet", "maiden",
+    # Pronouns. A fact whose subject is unresolved must not supersede anything --
+    # "she studies engineering" is about somebody, and guessing who is how a
+    # friend's degree ends up overwriting the user's.
+    "i", "he", "she", "it", "they", "we", "you",
+    "him", "her", "hers", "his", "them", "their", "theirs", "its", "our", "my",
+})
+
+
+def subject_of(fact_text: str) -> str:
+    """Who a stored fact is about: the last real word before its predicate.
+
+    The *last* word rather than the first, because the first is often a
+    possessor rather than the subject -- "Lingaa's mother lives in Delhi" is about
+    the mother, and keying it on Lingaa would make it fight with where Lingaa
+    lives.
+    """
+    text = str(fact_text or "")
+    for pattern, _key in _INFER_RE:
+        match = pattern.search(text)
+        if match:
+            return _subject_in(text[:match.start()])
+    return ""
+
+
+def _subject_in(before: str) -> str:
+    """The subject at the end of the words leading up to a predicate."""
+    words = re.findall(r"[A-Za-z0-9'\u2019-]+", before)
+    while words and words[-1].lower() in _NOT_A_SUBJECT:
+        words.pop()
+    if not words:
+        return ""
+    word = words[-1].lower()
+    for possessive in ("'s", "\u2019s"):
+        if word.endswith(possessive):
+            word = word[: -len(possessive)]
+    return word.strip("-'\u2019")
+
+
+def full_key(fact_text: str, declared: str = "") -> str:
+    """`subject:predicate`, or "" when the fact should accumulate instead.
+
+    The subject belongs in the key. Two people can study different things and
+    both facts are true, so a bare `studies` key makes each erase the other --
+    and once superseding moved into `add()`, where facts about *other people*
+    arrive, that stopped being hypothetical. The reported store held both
+    "Prahathi takes care of Lingaa" and facts about Lingaa's own studies.
+    """
+    predicate = str(declared or "") or infer_key(fact_text)
+    if not predicate:
+        return ""
+
+    subject = subject_of(fact_text)
+    if not subject and declared:
+        # A predicate the capture pattern knew about and the sentence does not
+        # reveal, so there is no match to look in front of. These texts come from
+        # the capture templates, which all begin with their subject.
+        subject = _subject_in(" ".join(str(fact_text or "").split()[:2]))
+    if not subject:
+        return ""
+    return f"{subject}:{predicate}"
+
+
+#: Hedges. A fact carrying one of these is the model's guess, and a guess stored
+#: as a fact is indistinguishable from something the user said.
+_HEDGE = re.compile(
+    r"\b(?:presumably|probably|possibly|perhaps|maybe|apparently|seemingly|"
+    r"allegedly|supposedly|likely|unclear|unconfirmed|unsure|not sure|"
+    r"i think|i believe|i guess|may be|might be|could be|must be|"
+    r"seems?\s+to|appears?\s+to|assum(?:e|es|ed|ing)|implies|suggests|inferred)\b",
+    re.IGNORECASE,
+)
+
+
+def is_speculation(text: str) -> bool:
+    """Is this an inference dressed as a fact?
+
+    Reported from a real store:
+
+        Klingesh (presumably a nickname for Lingaa) works on project-beastt
+
+    Nobody said that. End-of-session reflection worked it out, hedged it
+    honestly, and stored it anyway -- and once on disk a hedge reads exactly like
+    a fact, because recall hands the sentence to the model with no note of where
+    it came from. The model then repeats it with the hedge dropped.
+
+    Only applied to inferred facts. Something the user asked to be remembered is
+    stored as said, hedges and all: it is not this function's business to argue
+    with them.
+    """
+    return bool(_HEDGE.search(str(text or "")))
+
+
+#: First person, contractions first: "i'm" would otherwise be caught by the bare
+#: "i" rule and left as "Lingaa'm".
+_FIRST_PERSON = (
+    (re.compile(r"\bi'?m\b", re.IGNORECASE), "{name} is"),
+    (re.compile(r"\bi'?ve\b", re.IGNORECASE), "{name} has"),
+    (re.compile(r"\bi'?ll\b", re.IGNORECASE), "{name} will"),
+    (re.compile(r"\bi'?d\b", re.IGNORECASE), "{name} would"),
+    (re.compile(r"\bmyself\b", re.IGNORECASE), "{name}"),
+    (re.compile(r"\bmine\b", re.IGNORECASE), "{name}'s"),
+    (re.compile(r"\bmy\b", re.IGNORECASE), "{name}'s"),
+    (re.compile(r"\bme\b", re.IGNORECASE), "{name}"),
+    (re.compile(r"\bi\b"), "{name}"),
+)
+
+#: Verb agreement, applied after the subject has been swapped. Longest first, so
+#: "am not" is not left as "is not not".
+_AGREEMENT = (
+    ("am not", "is not"), ("haven't", "hasn't"), ("have not", "has not"),
+    ("don't", "doesn't"), ("do not", "does not"),
+    ("am", "is"), ("have", "has"), ("do", "does"),
+)
+
+
+def _agree(text: str, name: str) -> str:
+    """Fix the verb after a subject that has just changed person.
+
+    "i am studying MBA" becomes "Lingaa am studying MBA" without this, which is
+    the sort of sentence that makes a model distrust its own context.
+    """
+    for first, third in _AGREEMENT:
+        text = re.sub(rf"\b{re.escape(name)}\s+{re.escape(first)}\b",
+                      f"{name} {third}", text, flags=re.IGNORECASE)
+    return text
+
+
+def depersonalise(text: str, user_name: str = "") -> str:
+    """Take the first person out of a fact on its way into the store.
+
+    Stored facts are handed back to the model as background knowledge, so "my
+    friend prahathi" tells it that *it* has a friend called Prahathi. That is
+    where this came from:
+
+        - Lingaa likes my friend prahathi she is my home girl ...
+        - Lingaa owns Beastt, a project of hers
+
+    The store held the user's own words, the model resolved the pronouns to
+    itself, and by the second sentence it had lost track of whose project it was
+    and what gender the owner had. Only the leading clause was ever rewritten --
+    "i like" became "Lingaa likes" and every "my" after it survived.
+
+    "i" is matched case-sensitively on the lower-case spelling only. Capital "I"
+    is almost always the pronoun too, but this text also carries product names,
+    and rewriting the "I" in "RTX I" or a bare initial would be a new kind of
+    wrong.
+    """
+    name = str(user_name or "").strip() or "the user"
+    out = str(text or "")
+    for pattern, template in _FIRST_PERSON:
+        out = pattern.sub(template.format(name=name), out)
+    out = _agree(out, name)
+    return re.sub(r"\s+", " ", out).strip()
 
 
 def denial_from(text: str, name: str = "") -> str:

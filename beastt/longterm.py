@@ -212,11 +212,82 @@ class LongTermMemory:
             print(f"[memory] Couldn't save memory ({exc}).")
 
     # --- writing ----------------------------------------------------------
-    def add(self, text: str, core: bool = False) -> bool:
-        """Store a fact. Returns True if it was new."""
-        text = " ".join(text.strip().split())
+    def _stored_key(self, fact: Dict) -> str:
+        """The key an existing fact compares by, upgrading it if it is old.
+
+        Keys were `predicate` before they were `subject:predicate`, and a store
+        that has been running for months is full of the old shape. Without this
+        the change would work perfectly in tests and supersede nothing on a real
+        install -- which is exactly how the *first* version of superseding failed.
+        """
+        from .statements import full_key
+
+        stored = str(fact.get("key") or "")
+        if ":" in stored:
+            return stored
+        return full_key(fact["text"], stored)
+
+    def _blocked_by_core(self, text: str, key: str, core: bool) -> bool:
+        """Is this an inference arguing with something the user dictated?
+
+        Reflection re-reads the last twenty messages every six turns, so without
+        this an old transcript could quietly reinstate the very fact somebody had
+        just corrected. What they said outranks what it worked out.
+
+        The answer is to *drop* the inference, not to keep it beside the dictated
+        fact. Declining to overwrite while still appending was the first attempt,
+        and it reproduced the original bug exactly: recall then hands the model
+        both, and the model picks one.
+        """
+        if not key or core:
+            return False
+        return any(self._stored_key(fact) == key
+                   and fact["text"] != text
+                   and fact.get("core")
+                   for fact in self.facts)
+
+    def _displaced_by(self, text: str, key: str, core: bool) -> List[str]:
+        """Which stored facts a new one replaces. A query, so it can be asked twice."""
+        if not key or self._blocked_by_core(text, key, core):
+            return []
+        return [fact["text"] for fact in self.facts
+                if self._stored_key(fact) == key and fact["text"] != text]
+
+    def add(self, text: str, core: bool = False, key: str = "") -> bool:
+        """Store a fact, replacing anything it contradicts. True if it was new.
+
+        Superseding lives here, and that is the fix. It used to live only in
+        `remember_statement()`, so of the three ways a fact can arrive, two could
+        not correct the third. Reported:
+
+            > remember beast is my project and i am studying MBA
+            ...
+            - Lingaa studies engineering
+            - Lingaa is studying engineering
+
+        Both of those survived the correction, and the assistant went on answering
+        with them. The explicit "remember ..." skill calls `add()`, end-of-session
+        reflection calls `add()`, and only the deterministic statement capture went
+        through the one function that knew how to replace anything. The duplicate
+        pair is the same bug seen from the other side: two reflections phrased the
+        same fact differently and nothing noticed they were alternatives.
+        """
+        from .statements import depersonalise, full_key, is_speculation
+
+        text = " ".join(depersonalise(text, self.user_name).split())
         if len(text) < 3:
             return False
+        # An inferred hedge must not become a fact. What the user dictates is
+        # stored as said -- their sentence, their call.
+        if not core and is_speculation(text):
+            return False
+
+        key = full_key(text, key)
+        if self._blocked_by_core(text, key, core):
+            return False
+        displaced = self._displaced_by(text, key, core)
+        if displaced:
+            self.facts = [f for f in self.facts if f["text"] not in set(displaced)]
 
         new_tokens = _tokens(text)
         for fact in self.facts:
@@ -229,6 +300,11 @@ class LongTermMemory:
                 fact["updated"] = time.time()
                 if core:
                     fact["core"] = True
+                # No key written here on purpose. Superseding runs first, so any
+                # entry that shares this fact's key has already been removed --
+                # a merge is only ever with a fact of a *different* key, whose own
+                # key must survive. A line setting it here was unreachable, which
+                # a mutation proved by surviving.
                 self.save()
                 return False
 
@@ -236,6 +312,7 @@ class LongTermMemory:
             {
                 "text": text,
                 "core": core,
+                "key": key,
                 "created": time.time(),
                 "updated": time.time(),
             }
@@ -264,34 +341,19 @@ class LongTermMemory:
         one accumulate, because somebody can own two laptops but does not live in
         two cities.
         """
-        text = " ".join(str(getattr(statement, "text", statement) or "").split())
-        key = str(getattr(statement, "key", "") or "")
+        from .statements import depersonalise, full_key
+
+        text = " ".join(depersonalise(
+            str(getattr(statement, "text", statement) or ""), self.user_name).split())
+        declared = str(getattr(statement, "key", "") or "")
         if len(text) < 3:
             return []
 
-        replaced: List[str] = []
-        if key:
-            from .statements import infer_key
-
-            keep = []
-            for fact in self.facts:
-                # Keys are new, so anything already on disk has none and its key
-                # has to be read back off the sentence. Without that, superseding
-                # would work perfectly in tests and never once on a real install.
-                existing = fact.get("key") or infer_key(fact["text"])
-                if existing == key and fact["text"] != text:
-                    replaced.append(fact["text"])
-                else:
-                    keep.append(fact)
-            self.facts = keep
-
-        self.add(text)
-        # add() may have merged into an existing entry, so find it by text.
-        for fact in self.facts:
-            if fact["text"] == text:
-                fact["key"] = key
-                break
-        self.save()
+        # Asked before adding and done by adding: `add()` performs the removal, so
+        # this only needs to know what to report back. Two calls to a pure query
+        # beats two copies of the rule.
+        replaced = self._displaced_by(text, full_key(text, declared), core=False)
+        self.add(text, key=declared)
         return replaced
 
     def forget(self, query: str) -> List[str]:

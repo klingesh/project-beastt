@@ -912,6 +912,92 @@ from its real timestamps. All 35 applied mutations caught.
 
 ---
 
+## 11. A correction that could not correct anything
+
+**Symptom.** Told the day before that BEASTT was a friend's project and that its
+user studied engineering — both wrong — the user corrected it:
+
+> **remember beast is my project and i am studying MBA**
+
+Asked the next morning, the answer was unchanged. The recited store showed why:
+
+```
+- Lingaa likes my friend prahathi she is my home girl that advises and corrects me ...
+- Lingaa owns Beastt, a project of hers
+- Lingaa studies engineering
+- Lingaa is studying engineering
+- Klingesh (presumably a nickname for Lingaa) works on project-beastt
+```
+
+**Four faults in five lines.**
+
+*The correction could not displace anything.* Superseding lived in
+`remember_statement()`, and neither of the other two writers goes through it: the
+explicit "remember ..." skill calls `add()`, and end-of-session reflection calls
+`add()`. **Two of the three ways a fact can arrive could not correct the third** —
+and the one that could was the one nobody uses to make a correction.
+
+*The same fact was stored twice, differently worded.* "studies engineering" and
+"is studying engineering" are alternatives that nothing recognised as such. The
+same bug from the other side.
+
+*First person survived into the store.* Only the leading clause was ever
+rewritten, so "my friend", "corrects me" and "i am" went in verbatim. Recall then
+hands those sentences to the model as *its own* background knowledge, where "my
+friend prahathi" says the assistant has a friend called Prahathi. Two lines later
+it had lost track of whose project BEASTT was and what gender the owner had —
+"a project of hers".
+
+*A hedge became a fact.* Nobody said Klingesh was a nickname. Reflection worked it
+out, marked it "presumably", and stored it — after which a hedge is
+indistinguishable from something the user said, because recall passes the sentence
+on with no note of where it came from. The model then repeats it with the hedge
+dropped. **This is what "it hallucinates" actually looked like: the store was
+feeding it guesses in the same voice as facts.**
+
+**Fix.** Superseding moved into `add()`, so every writer has it. Which immediately
+made a latent flaw dangerous: facts about *other people* now enter the mechanism,
+and a bare `studies` key would make a friend's degree erase the user's. So keys
+became `subject:predicate`, with the subject taken from the *last* word before the
+predicate rather than the first — "Lingaa's mother lives in Delhi" is about the
+mother, and keying it on Lingaa would make it fight with where Lingaa lives. A
+fact whose subject is an unresolved pronoun gets no key at all: guessing who "she"
+is, is how a friend's life overwrites the user's.
+
+Alongside that: `is_speculation()` refuses a hedged sentence from reflection while
+letting the user dictate whatever they like — their sentence, their call. And
+`depersonalise()` takes the first person out of every fact on the way in, with
+verb agreement, because "Lingaa am studying MBA" is the sort of sentence that
+makes a model distrust its own context.
+
+Three decisions worth keeping:
+
+* **What you said outranks what it guessed, and the guess is dropped.**
+  Reflection re-reads the last twenty messages every six turns, so without this an
+  old transcript can reinstate the very fact just corrected. The first attempt
+  merely declined to overwrite and appended anyway — which reproduced the original
+  bug exactly: recall then hands the model both, and the model picks one.
+* **Legacy keys are upgraded on comparison.** Keys were `predicate` before they
+  were `subject:predicate`, and a store months old is full of the old shape.
+  Without this the change would pass every test and supersede nothing on the
+  machine that reported it — which is precisely how the *first* version of
+  superseding failed (entry 8f).
+* **The merge branch writes no key.** Superseding runs first, so a merge is only
+  ever with a fact of a different key, whose own key must survive.
+
+**Five mutations were not caught, and four said the same thing:** the declared key
+on a `Statement` was decoration. Every keyed template re-infers its predicate from
+its own output, so dropping the declared key changed no behaviour at all — meaning
+the next refactor would have deleted it. It is now load-bearing, with a predicate
+the sentence does not reveal. The fifth was `remember_statement` rewriting pronouns
+before working out what it displaced: without that, hearing a fact a second time is
+announced as "noted: ... (replacing 1)".
+
+87 checks in `tests/test_corrections_stick.py`, including the reported store
+replayed end to end. All 32 applied mutations caught.
+
+---
+
 ## Operator notes
 
 **Restarting BEASTT after an update.** The background service holds the old code, so
@@ -978,6 +1064,15 @@ output, not input.
     is always a successful one. Before trusting a signal, ask what the *other*
     explanation would have looked like — if it looks identical, the signal is not
     evidence. Both diagnoses this log records as wrong were confident.
+15. **A rule enforced at one entry point is not enforced.** Entry 11's correction
+    failed because superseding lived in one of three writers, and entry 10's
+    publish age was dropped by three call sites at once. Put the rule where the
+    data lands — in the store, in the constructor, in the one function everything
+    funnels through — and then mutate each caller to prove it is still reached.
+16. **Never store a guess in the same voice as a fact.** Recall hands a sentence
+    to the model with no note of where it came from, so "presumably a nickname"
+    and something the user said are indistinguishable a day later. Most of what
+    looked like hallucination was the store feeding it back its own speculation.
 
 ## Scope
 

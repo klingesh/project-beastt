@@ -183,7 +183,9 @@ class TestCorrectingAFact:
         memory.remember_statement(fact("i live in chennai"))
 
         stored = [f for f in memory.facts if f["text"] == "Lingaa lives in chennai"]
-        assert stored and stored[0].get("key") == "lives-in"
+        # Subject included since superseding moved into add(): a bare predicate
+        # made two people's studies erase one another.
+        assert stored and stored[0].get("key") == "lingaa:lives-in"
 
     def test_a_keyless_fact_records_an_empty_key(self, memory):
         memory.remember_statement(fact("i have a laptop"))
@@ -194,7 +196,7 @@ class TestCorrectingAFact:
 
         reloaded = LongTermMemory(path=memory.path, user_name=USER)
 
-        assert reloaded.facts[0].get("key") == "lives-in"
+        assert reloaded.facts[0].get("key") == "lingaa:lives-in"
 
     def test_facts_without_a_key_accumulate(self, memory):
         """Someone can own two laptops."""
