@@ -344,6 +344,15 @@ _AGREEMENT = (
     ("am not", "is not"), ("haven't", "hasn't"), ("have not", "has not"),
     ("don't", "doesn't"), ("do not", "does not"),
     ("am", "is"), ("have", "has"), ("do", "does"),
+    # A short list of verbs that follow "i" often and are almost never a noun
+    # sitting directly after somebody's name. "Lingaa call her as prahathi" was
+    # in the reported store, and a store written in broken grammar gives a model
+    # every reason to distrust what else is in there.
+    ("live", "lives"), ("stay", "stays"), ("work", "works"),
+    ("study", "studies"), ("like", "likes"), ("love", "loves"),
+    ("prefer", "prefers"), ("hate", "hates"), ("want", "wants"),
+    ("need", "needs"), ("know", "knows"), ("think", "thinks"),
+    ("own", "owns"), ("use", "uses"), ("call", "calls"), ("speak", "speaks"),
 )
 
 

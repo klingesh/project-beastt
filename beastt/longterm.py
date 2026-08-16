@@ -20,7 +20,7 @@ import json
 import os
 import re
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 _STOPWORDS = {
     "a", "an", "the", "i", "im", "i'm", "me", "my", "mine", "you", "your", "is",
@@ -190,6 +190,15 @@ class LongTermMemory:
         self.user_name = str(user_name or "")
         self.facts: List[Dict] = []
         self._load()
+        # Facts written before the store knew how to refuse them are still on
+        # disk, and no amount of validating new writes reaches them. Idempotent,
+        # so after the first run there is nothing left to do.
+        repaired = self.repair()
+        if repaired:
+            print(f"[memory] Tidied {len(repaired)} fact(s) written before the "
+                  f"store checked them:")
+            for note in repaired[:6]:
+                print(f"[memory]   {note}")
 
     # --- persistence ------------------------------------------------------
     def _load(self) -> None:
@@ -210,6 +219,85 @@ class LongTermMemory:
                 json.dump({"facts": self.facts}, fh, indent=2, ensure_ascii=False)
         except Exception as exc:
             print(f"[memory] Couldn't save memory ({exc}).")
+
+    # --- repair -----------------------------------------------------------
+    def repair(self) -> List[str]:
+        """Apply today's rules to yesterday's facts. Returns what it did.
+
+        The reported store had been through two rounds of fixes and still recited
+        the same nonsense, because every fix guarded the *entrance*: the sentences
+        already on disk were written when nothing checked them. Three things get
+        undone here, all of them things the store would now refuse:
+
+        * first person, which tells the model the user's friends are its own;
+        * a hedge stored as a fact, which is the model's guess in the same voice
+          as something the user said;
+        * a fact stored twice in different words, which leaves recall handing over
+          two versions of one thing.
+
+        Deliberately conservative about the third: only near-identical sentences
+        are collapsed, not everything sharing a key. "studies engineering" and "is
+        studying engineering" are one fact; "studies engineering" and "studies
+        renewable energy" might be two, and throwing one away on a guess is how a
+        repair becomes the next bug report. A correction now supersedes both
+        anyway, which is the user's own call to make.
+
+        A dictated fact is never dropped for hedging -- the user is allowed to
+        record uncertainty -- but it is still depersonalised, because "my friend"
+        in the store is wrong whoever typed it.
+        """
+        from .statements import depersonalise, is_speculation
+
+        notes: List[str] = []
+        kept: List[Dict] = []
+        for fact in self.facts:
+            original = str(fact.get("text", ""))
+            text = " ".join(depersonalise(original, self.user_name).split())
+            if text != original:
+                notes.append(f"rewrote first person: {original[:60]}")
+                fact["text"] = text
+
+            if not fact.get("core") and is_speculation(text):
+                notes.append(f"dropped a guess: {text[:60]}")
+                continue
+
+            twin = self._near_identical(text, kept)
+            if twin is not None:
+                notes.append(f"merged a duplicate: {text[:60]}")
+                if len(text) > len(twin["text"]):
+                    twin["text"] = text
+                twin["core"] = bool(twin.get("core") or fact.get("core"))
+                continue
+
+            # Through _stored_key, not full_key: an already-upgraded key must be
+            # left alone. Passing one back in as a declared predicate produced
+            # "lingaa:lingaa:lives-in", which compares equal to nothing.
+            fact["key"] = self._stored_key(fact)
+            kept.append(fact)
+
+        if notes:
+            self.facts = kept
+            self.save()
+        return notes
+
+    def _near_identical(self, text: str, among: List[Dict]) -> Optional[Dict]:
+        """The fact in `among` that says the same thing, or None.
+
+        The same 0.80 token threshold `add()` merges on, so a store repairs to the
+        state it would have reached had the rule always been there.
+        """
+        new_tokens = _tokens(text)
+        if not new_tokens:
+            return None
+        for fact in among:
+            existing = _tokens(fact.get("text", ""))
+            if not existing:
+                continue
+            overlap = (len(existing & new_tokens)
+                       / max(1, min(len(existing), len(new_tokens))))
+            if overlap >= 0.8:
+                return fact
+        return None
 
     # --- writing ----------------------------------------------------------
     def _stored_key(self, fact: Dict) -> str:
@@ -355,6 +443,19 @@ class LongTermMemory:
         replaced = self._displaced_by(text, full_key(text, declared), core=False)
         self.add(text, key=declared)
         return replaced
+
+    def remember_dictated(self, text: str) -> Tuple[bool, List[str]]:
+        """Store something the user asked for, and report what it displaced.
+
+        The reporting is the point. Two days were spent believing a correction had
+        landed because the reply said "Got it": the skill can now name the sentence
+        that went, which is a claim that would be visibly false if nothing had.
+        """
+        from .statements import depersonalise, full_key
+
+        cleaned = " ".join(depersonalise(text, self.user_name).split())
+        replaced = self._displaced_by(cleaned, full_key(cleaned), core=True)
+        return self.add(text, core=True), replaced
 
     def forget(self, query: str) -> List[str]:
         """Remove facts matching a query. Returns the removed fact texts."""

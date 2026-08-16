@@ -809,7 +809,7 @@ pip install pytest
 pytest
 ```
 
-1917 checks, about seven seconds. They need **no** model, no network, no API keys
+1962 checks, about seven seconds. They need **no** model, no network, no API keys
 and no optional packages — every function they cover is pure, and
 `tests/conftest.py` stubs `requests` if it isn't installed (the stub raises if
 anything tries to make a real request).
@@ -844,6 +844,7 @@ What they cover, and why these functions in particular:
 | `freshness` / `update.py` | a server running code that is no longer on disk says so |
 | `trading.stale_verdict` | a silent bot and a silent publisher are told apart, not guessed at |
 | `longterm.add` / `statements` | a correction replaces what it contradicts, and a guess is never stored as a fact |
+| `memory_skill.instructions` | three corrections typed on three lines all run, and the reply cannot claim work it did not do |
 
 Nineteen of those checks are marked `xfail(strict=True)`: known bugs, written out
 as the behaviour that *should* hold, with the cause in the reason string. The

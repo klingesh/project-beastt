@@ -42,6 +42,7 @@ along with no note of where it came from.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -538,3 +539,327 @@ class TestTheReasoningIsRecorded:
 
         assert "reinstate the very fact" in text
         assert "reproduced the original bug" in text
+
+
+
+# ---------------------------------------------------------------------------
+# Second report, after the fixes above shipped. The store was unchanged, and
+# the reason was not superseding at all.
+#
+#   for fuck sake remember this forget beastt is a project of hers
+#   forget klingesh is presumably a nickname
+#   remember beastt is my project and i am studying MBA
+#
+#   Jarvis: Got it, Lingaa—I'll keep it straight from now on: BEASTT is your
+#           own project, and you're studying for an MBA.
+#
+# Not one of those three instructions ran. The patterns are anchored with
+# `.match()` against the *whole message*, which begins "for fuck sake", so the
+# skill declined it and the model answered instead -- sounding exactly like it
+# had complied. Two days were spent believing a correction had landed.
+#
+# And the facts already on disk were written before any of these rules existed,
+# so guarding the entrance could never reach them.
+# ---------------------------------------------------------------------------
+
+THE_MESSAGE = (
+    "for fuck sake remember this forget beastt is a project of hers\n"
+    "forget klingesh is presumably a nickname\n"
+    "remember beastt is my project and i am studying MBA"
+)
+
+
+class TestTheMessageAsItWasActuallyTyped:
+    def test_all_three_instructions_are_found(self):
+        from beastt.skills.memory_skill import instructions
+
+        assert instructions(THE_MESSAGE) == [
+            ("forget", "beastt is a project of hers"),
+            ("forget", "klingesh is presumably a nickname"),
+            ("remember", "beastt is my project and i am studying MBA"),
+        ]
+
+    def test_the_skill_claims_it(self, skill):
+        """It declined the whole message, which is how the model came to answer."""
+        assert skill.matches(THE_MESSAGE) is True
+
+    def test_every_instruction_is_reported_separately(self, store, skill):
+        store.add("Lingaa owns Beastt, a project of hers")
+        store.add("Lingaa studies engineering")
+
+        reply = skill.run(THE_MESSAGE)
+
+        assert reply.count("\n") == 2
+        assert "Forgotten: Lingaa owns Beastt" in reply
+        assert "nothing to forget" in reply          # the guess was never stored
+        assert "That replaces: Lingaa studies engineering" in reply
+
+    def test_the_correction_lands(self, store, skill):
+        store.add("Lingaa owns Beastt, a project of hers")
+        store.add("Lingaa studies engineering")
+
+        skill.run(THE_MESSAGE)
+
+        assert not [t for t in texts(store) if "engineering" in t]
+        assert not [t for t in texts(store) if "of hers" in t]
+        assert any("MBA" in t for t in texts(store))
+
+
+class TestReadingInstructionsOffAMessage:
+    @pytest.mark.parametrize("text, expected", [
+        ("remember i study MBA", [("remember", "i study MBA")]),
+        ("hey jarvis remember i study MBA", [("remember", "i study MBA")]),
+        ("ok remember i study MBA", [("remember", "i study MBA")]),
+        ("for fuck sake remember i study MBA", [("remember", "i study MBA")]),
+        ("cmon remember i study MBA", [("remember", "i study MBA")]),
+        ("seriously, remember i study MBA", [("remember", "i study MBA")]),
+        ("i said remember i study MBA", [("remember", "i study MBA")]),
+    ])
+    def test_filler_in_front_is_stepped_over(self, text, expected):
+        from beastt.skills.memory_skill import instructions
+
+        assert instructions(text) == expected
+
+    def test_remember_this_before_another_instruction_is_just_attention(self):
+        """"remember this forget X" is not a fact called "this forget X"."""
+        from beastt.skills.memory_skill import instructions
+
+        assert instructions("remember this forget my old address") == [
+            ("forget", "my old address")]
+
+    def test_remember_this_colon_still_carries_its_fact(self):
+        """Only stripped when a directive follows. Otherwise the fact is lost."""
+        from beastt.skills.memory_skill import instructions
+
+        assert instructions("remember this: i study MBA") == [
+            ("remember", "i study MBA")]
+
+    def test_several_lines_are_all_read(self):
+        from beastt.skills.memory_skill import instructions
+
+        found = instructions("remember i study MBA\nforget engineering\n"
+                             "remember i live in chennai")
+
+        assert [kind for kind, _ in found] == ["remember", "forget", "remember"]
+
+    def test_a_blank_line_is_skipped(self):
+        from beastt.skills.memory_skill import instructions
+
+        assert len(instructions("remember i study MBA\n\n\nforget engineering")) == 2
+
+    @pytest.mark.parametrize("text", [
+        "what is the weather like",
+        "i remember when this used to work",
+        "can you forget about it later",
+        "",
+    ])
+    def test_ordinary_conversation_is_not_an_instruction(self, text):
+        """Anchored per line on purpose. "i remember when ..." is reminiscing."""
+        from beastt.skills.memory_skill import instructions
+
+        assert instructions(text) == []
+
+    def test_a_pasted_document_does_not_file_itself(self):
+        """The reason this scans lines rather than searching anywhere: an
+        unanchored "remember" would let any pasted text write to memory, which is
+        a bug this project has already had once."""
+        from beastt.skills.memory_skill import instructions
+
+        pasted = ("The report notes that readers should remember the following "
+                  "figures.\nAnalysts forget the base rate at their peril.")
+
+        assert instructions(pasted) == []
+
+    def test_filler_is_not_peeled_away_indefinitely(self):
+        """Two passes, not a loop. A paragraph must not be stripped one word at a
+        time until an instruction appears somewhere in the middle."""
+        from beastt.skills.memory_skill import instructions
+
+        assert instructions("ok so and also now just please listen note "
+                            "remember i study MBA") == []
+
+
+class TestTheReplyCannotLieAboutWhatHappened:
+    """The failure being fixed was a confident "Got it" over an unchanged store."""
+
+    def test_a_correction_names_what_it_replaced(self, store, skill):
+        store.add("Lingaa studies engineering")
+
+        reply = skill.run("remember i am studying MBA")
+
+        assert "That replaces: Lingaa studies engineering" in reply
+
+    def test_a_forget_that_matched_nothing_says_so(self, store, skill):
+        reply = skill.run("forget that i studied medicine")
+
+        assert "Nothing stored" in reply
+        assert "nothing to forget" in reply
+
+    def test_a_fact_already_known_is_not_dressed_up_as_new(self, store, skill):
+        store.add("Lingaa studies MBA", core=True)
+
+        reply = skill.run("remember i study MBA")
+
+        assert "Already had that one" in reply
+
+    def test_what_the_skill_stores_counts_as_dictated(self, store, skill):
+        """Not a detail: dictated facts are exempt from the hedge filter, outrank
+        anything reflection infers, and survive eviction. A fact stored through
+        this path without that flag is a correction that reflection can undo."""
+        skill.run("remember i am probably moving to Bangalore")
+
+        assert len(store.facts) == 1
+
+    def test_a_correction_cannot_be_undone_by_reflection(self, store, skill):
+        """The whole point, through the path the user actually types."""
+        skill.run("remember i am studying MBA")
+
+        assert store.add("Lingaa studies engineering") is False
+        assert any("MBA" in t for t in texts(store))
+
+    def test_the_store_reports_what_a_dictated_fact_displaced(self, store):
+        store.add("Lingaa studies engineering")
+
+        was_new, replaced = store.remember_dictated("Lingaa studies MBA")
+
+        assert was_new is True
+        assert replaced == ["Lingaa studies engineering"]
+
+
+class TestRepairingAStoreWrittenBeforeTheRules:
+    """Guarding the entrance cannot reach what is already inside."""
+
+    def seeded(self, tmp_path, facts):
+        path = tmp_path / "memory.json"
+        path.write_text(json.dumps({"facts": [
+            {"text": t, "core": False, "created": 1, "updated": i}
+            for i, t in enumerate(facts)]}), encoding="utf-8")
+        return LongTermMemory(path=str(path), user_name=USER)
+
+    def test_first_person_is_rewritten_on_load(self, tmp_path):
+        store = self.seeded(tmp_path, ["Lingaa likes my friend prahathi"])
+
+        assert texts(store) == ["Lingaa likes Lingaa's friend prahathi"]
+
+    def test_a_stored_guess_is_dropped_on_load(self, tmp_path):
+        store = self.seeded(
+            tmp_path, ["Klingesh (presumably a nickname for Lingaa) works on beastt"])
+
+        assert texts(store) == []
+
+    def test_a_duplicate_pair_collapses_on_load(self, tmp_path):
+        store = self.seeded(tmp_path, ["Lingaa studies engineering",
+                                       "Lingaa is studying engineering"])
+
+        assert len(store.facts) == 1
+
+    def test_different_values_are_left_for_the_user_to_correct(self, tmp_path):
+        """Conservative on purpose. These share a key, but throwing one away on a
+        guess is how a repair becomes the next bug report -- and a correction now
+        supersedes both anyway, which is the user's call."""
+        store = self.seeded(tmp_path, ["Lingaa studies engineering",
+                                       "Lingaa is studying renewable energy"])
+
+        assert len(store.facts) == 2
+
+    def test_a_dictated_hedge_is_kept(self, tmp_path):
+        """The user is allowed to record uncertainty. Only inferred hedges go."""
+        path = tmp_path / "memory.json"
+        path.write_text(json.dumps({"facts": [
+            {"text": "Lingaa is probably moving to Bangalore", "core": True,
+             "created": 1, "updated": 1}]}), encoding="utf-8")
+
+        store = LongTermMemory(path=str(path), user_name=USER)
+
+        assert len(store.facts) == 1
+
+    def test_a_dictated_fact_is_still_depersonalised(self, tmp_path):
+        """"my friend" in the store is wrong whoever typed it."""
+        path = tmp_path / "memory.json"
+        path.write_text(json.dumps({"facts": [
+            {"text": "Lingaa likes my friend prahathi", "core": True,
+             "created": 1, "updated": 1}]}), encoding="utf-8")
+
+        store = LongTermMemory(path=str(path), user_name=USER)
+
+        assert texts(store) == ["Lingaa likes Lingaa's friend prahathi"]
+
+    def test_it_is_written_back_to_disk(self, tmp_path):
+        """The file itself, not a reloaded store -- a store repairs on load, so
+        reading it back through one would pass whether or not anything persisted.
+        The file matters: the CLI and the browser both open it, and somebody
+        opening memory.json to check what is in there deserves the truth.
+        """
+        store = self.seeded(tmp_path, ["Lingaa likes my friend prahathi"])
+
+        on_disk = json.loads(Path(store.path).read_text(encoding="utf-8"))
+
+        assert [f["text"] for f in on_disk["facts"]] == [
+            "Lingaa likes Lingaa's friend prahathi"]
+
+    def test_it_does_nothing_the_second_time(self, tmp_path):
+        """Idempotent, so it is safe to run on every load."""
+        store = self.seeded(tmp_path, ["Lingaa likes my friend prahathi",
+                                       "Lingaa studies engineering",
+                                       "Lingaa is studying engineering"])
+
+        assert store.repair() == []
+
+    def test_a_clean_store_is_not_rewritten(self, tmp_path):
+        store = self.seeded(tmp_path, ["Lingaa studies MBA",
+                                       "Lingaa owns a laptop with an RTX 3050"])
+
+        assert store.repair() == []
+        assert len(store.facts) == 2
+
+    def test_it_says_what_it_did(self, tmp_path, capsys):
+        """Silent data surgery is not something to do to somebody's memory file.
+        The log names each change, so an unwelcome one is traceable."""
+        self.seeded(tmp_path, ["Lingaa likes my friend prahathi",
+                               "Lingaa probably studies medicine"])
+
+        out = capsys.readouterr().out
+
+        assert "Tidied 2 fact(s)" in out
+        assert "rewrote first person" in out
+        assert "dropped a guess" in out
+
+    def test_the_whole_reported_store(self, tmp_path):
+        """Every line from the screenshot, then the message as typed."""
+        store = self.seeded(tmp_path, [
+            "Lingaa likes my friend prahathi she is my home girl that corrects me",
+            "Prahathi is Lingaa's friend",
+            "Lingaa studies engineering",
+            "Lingaa is studying engineering",
+            "Lingaa owns Beastt, a project of hers",
+            "Klingesh (presumably a nickname for Lingaa) works on project-beastt",
+            "Lingaa owns a laptop with an RTX 3050",
+        ])
+
+        MemorySkill(store, USER).run(THE_MESSAGE)
+        remaining = texts(store)
+
+        assert not [t for t in remaining if "engineering" in t]
+        assert not [t for t in remaining if "of hers" in t]
+        assert not [t for t in remaining if "presumably" in t]
+        assert not [t for t in remaining if " my " in t]
+        assert [t for t in remaining if "MBA" in t]
+        assert "Lingaa owns a laptop with an RTX 3050" in remaining
+
+
+class TestGrammarInTheStore:
+    @pytest.mark.parametrize("text, expected", [
+        ("i call her prahathi", "Lingaa calls her prahathi"),
+        ("i live in chennai", "Lingaa lives in chennai"),
+        ("i study MBA", "Lingaa studies MBA"),
+        ("i own a laptop", "Lingaa owns a laptop"),
+        ("i use GitHub", "Lingaa uses GitHub"),
+        ("i want a new phone", "Lingaa wants a new phone"),
+    ])
+    def test_the_verb_follows_the_subject(self, text, expected):
+        assert statements.depersonalise(text, USER) == expected
+
+    def test_a_verb_not_on_the_list_is_left_alone(self):
+        """A bounded list, because anything after a name might be a noun."""
+        assert statements.depersonalise("i cycle to work", USER) == \
+            "Lingaa cycle to work"

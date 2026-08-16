@@ -993,8 +993,74 @@ the sentence does not reveal. The fifth was `remember_statement` rewriting prono
 before working out what it displaced: without that, hearing a fact a second time is
 announced as "noted: ... (replacing 1)".
 
-87 checks in `tests/test_corrections_stick.py`, including the reported store
-replayed end to end. All 32 applied mutations caught.
+### 11a. The fix shipped, the store was unchanged, and the model said "Got it"
+
+**Symptom.** Everything above was in place. The user typed the three commands they
+had been given — and got a warm confirmation over a store that had not changed:
+
+> **for fuck sake remember this forget beastt is a project of hers**
+> **forget klingesh is presumably a nickname**
+> **remember beastt is my project and i am studying MBA**
+>
+> Got it, Lingaa—I'll keep it straight from now on: BEASTT is your own project,
+> and you're studying for an MBA.
+
+**Not one of those three instructions ran.** `_REMEMBER` and `_FORGET` are
+anchored and matched against the *whole message*, which begins "for fuck sake", so
+`MemorySkill.matches()` returned False, the message fell through to the model, and
+the model — having no way to write to memory and no idea that it can't — replied as
+though it had complied. **A false confirmation is worse than a refusal.** Two days
+were spent believing a correction had landed.
+
+Underneath that, two more:
+
+*Only one instruction per message was ever possible*, because both patterns were
+matched once against the whole text. Three lines meant at most one action.
+
+*Every fix so far guarded the entrance.* The sentences already on disk were
+written when nothing checked them, so no amount of validating new writes could
+reach them — the duplicate pair, the first-person text and the stored guess were
+all still there and still being recited.
+
+**Fix.** `instructions()` reads a message **line by line, each line still
+anchored**, steps over a bounded list of filler ("for fuck sake", "cmon", "hey
+jarvis", "i said"), and returns every directive it finds. Deliberately not an
+unanchored search for "remember": that would let a pasted document file its own
+contents, which is a bug this project has already had. Filler is stripped in two
+passes and not a loop, so a paragraph cannot be peeled away a word at a time until
+something matches.
+
+`"remember this"` immediately followed by another directive is treated as someone
+getting your attention rather than a fact called "this" — but only when a directive
+follows, so `"remember this: i study MBA"` keeps its fact.
+
+Every instruction is applied and **reported separately**, and a correction now
+names the sentence it displaced: *"That replaces: Lingaa studies engineering"*. A
+forget that matched nothing says so. The reply cannot be a confident summary of
+work that did not happen.
+
+And `repair()` runs on load, applying today's rules to yesterday's facts:
+first person rewritten, inferred hedges dropped, near-identical duplicates
+collapsed. Conservative about the last one — only sentences that say the same
+thing, not everything sharing a key, because "studies engineering" and "studies
+renewable energy" might genuinely be two facts and throwing one away on a guess is
+how a repair becomes the next bug report. It logs every change: silent surgery on
+somebody's memory file is not a thing to do quietly.
+
+Replaying the reported store verbatim: 6 facts tidied on load, all three
+instructions applied, and `what do you know about me` came back with no
+engineering, no "project of hers", no "presumably", and no first person.
+
+**Four mutations were not caught, and two were real.** Nothing checked that the
+skill marks its facts as dictated — without which reflection can quietly undo a
+correction, which is the whole property. And `repair`'s save was unpinned because
+the test read the file back *through a store*, which repairs on load and would
+therefore pass whether or not anything persisted; it now asserts the JSON on disk.
+The other two were harness bugs of the shape this log keeps recording: unanchoring
+`.match()` changes nothing while the pattern still starts with `^` — the anchoring
+is held twice over — and one pattern simply did not appear in the file.
+
+132 checks in `tests/test_corrections_stick.py`. All 26 applied mutations caught.
 
 ---
 
@@ -1073,6 +1139,16 @@ output, not input.
     to the model with no note of where it came from, so "presumably a nickname"
     and something the user said are indistinguishable a day later. Most of what
     looked like hallucination was the store feeding it back its own speculation.
+17. **A false confirmation is worse than a refusal.** Entry 11a's model said "Got
+    it, I'll keep it straight" over a store it had not touched and cannot touch,
+    and that reply cost two days. If an action either happened or did not, the
+    reply must name what changed — "that replaces X" is checkable, "got it" is
+    not. Anything that can only be confirmed by the component that did the work
+    must be worded by that component.
+18. **Validating the entrance never reaches what is already inside.** Three
+    rounds of fixes to how facts are *written* left the reported store reciting
+    the same nonsense, because every bad sentence predated all of them. A rule
+    worth enforcing on new data is usually worth applying once to the old.
 
 ## Scope
 

@@ -29,6 +29,63 @@ _RECALL = re.compile(
     re.IGNORECASE,
 )
 
+#: Filler in front of an instruction. Reported: three corrections in one message,
+#: none of which fired, because the first line began "for fuck sake remember
+#: this" and the patterns are anchored at the start of the whole message. The
+#: model then answered "Got it, I'll keep it straight" and stored nothing, which
+#: is the worst of the available outcomes -- the user believed it was fixed.
+#:
+#: Bounded to a known list rather than searching anywhere in the line. An
+#: unanchored search for "remember" would let a pasted article file its contents
+#: as facts, which is a bug this project has already had once.
+_PREAMBLE = re.compile(
+    r"^(?:"
+    r"hey\s+[a-z]{3,10}|ok(?:ay)?|so|and|also|now|just|please|kindly|"
+    r"listen|look|note|c'?mon|come\s+on|seriously|dude|mate|bro|"
+    r"for\s+\w+(?:'s)?\s+sake|for\s+the\s+love\s+of\s+\w+|"
+    r"i\s+(?:said|told\s+you)|again|damn|damn\s+it|"
+    r"[^\w\s]+"
+    r")\b[\s,:;.!-]*",
+    re.IGNORECASE,
+)
+
+#: "remember this" immediately followed by another instruction is someone getting
+#: your attention, not a fact whose content is the word "this". Only stripped when
+#: a directive follows, so "remember this: i study MBA" keeps its fact.
+_ATTENTION = re.compile(
+    r"^remember\s+(?:this|that|these|it)\b[\s,:;.!-]*(?=(?:remember|forget)\b)",
+    re.IGNORECASE,
+)
+
+
+def instructions(text: str):
+    """Every memory instruction in a message, as (kind, body), in order.
+
+    Line by line, each line still anchored. That is the whole design: it accepts
+    the three corrections someone types on three lines, and a bit of swearing in
+    front of them, without becoming an unanchored search that a pasted document
+    could trip.
+    """
+    found = []
+    for line in re.split(r"[\n\r]+", str(text or "")):
+        line = line.strip()
+        # Twice, because "for fuck sake" and "remember this" can stack -- and
+        # twice rather than a loop, so a paragraph of filler cannot be peeled
+        # away one word at a time until something matches.
+        for _ in range(2):
+            line = _PREAMBLE.sub("", line, count=1).strip()
+            line = _ATTENTION.sub("", line, count=1).strip()
+        if not line:
+            continue
+        for kind, pattern in (("remember", _REMEMBER), ("forget", _FORGET)):
+            match = pattern.match(line)
+            if match:
+                body = match.group(1).strip().rstrip(".")
+                if body:
+                    found.append((kind, body))
+                break
+    return found
+
 
 class MemorySkill(Skill):
     name = "memory"
@@ -41,8 +98,7 @@ class MemorySkill(Skill):
         return bool(
             _FORGET_ALL.search(text)
             or _RECALL.search(text)
-            or _REMEMBER.match(text)
-            or _FORGET.match(text)
+            or instructions(text)
         )
 
     def run(self, text: str) -> str:
@@ -66,28 +122,36 @@ class MemorySkill(Skill):
             extra = "" if len(facts) <= 15 else f"\n...and {len(facts) - 15} more."
             return f"Here's what I remember about you:\n{listing}{extra}"
 
-        # Explicit remember.
-        m = _REMEMBER.match(text)
-        if m:
-            fact = m.group(1).strip().rstrip(".")
-            # Rewrite first person into third person so the stored fact reads well.
-            normalised = self._to_third_person(fact)
-            is_new = self.memory.add(normalised, core=True)
-            if is_new:
-                return f"Got it -- I'll remember that {fact}."
-            return f"I already had that noted, but thanks for confirming: {fact}."
+        # Remembering and forgetting, however many of each arrive at once.
+        found = instructions(text)
+        if not found:
+            return ""
 
-        # Explicit forget.
-        m = _FORGET.match(text)
-        if m:
-            query = m.group(1).strip().rstrip(".")
-            removed = self.memory.forget(query)
+        lines = [self._apply(kind, body) for kind, body in found]
+        if len(lines) == 1:
+            return lines[0]
+        # Itemised, because the failure this replaced was a confident "Got it"
+        # over a store that had not changed. Each instruction reports separately
+        # so a miss is visible instead of averaged away.
+        return "\n".join(f"- {line}" for line in lines)
+
+    def _apply(self, kind: str, body: str) -> str:
+        if kind == "forget":
+            removed = self.memory.forget(body)
             if removed:
-                listing = "; ".join(removed[:3])
-                return f"Forgotten: {listing}."
-            return f"I couldn't find anything about \"{query}\" in my memory."
+                return f"Forgotten: {'; '.join(removed[:3])}."
+            return f"Nothing stored about \"{body}\" -- so nothing to forget."
 
-        return ""
+        fact = self._to_third_person(body)
+        was_new, replaced = self.memory.remember_dictated(fact)
+        if replaced:
+            # Named, not counted. This is the sentence the user has been trying
+            # to get rid of for two days; seeing it go is the confirmation.
+            return (f"Got it -- {body}. That replaces: "
+                    f"{'; '.join(replaced[:3])}.")
+        if was_new:
+            return f"Got it -- I'll remember that {body}."
+        return f"Already had that one, but thanks for confirming: {body}."
 
     _IRREGULAR = {
         "have": "has",
